@@ -398,7 +398,7 @@ class MappingDialog(tk.Toplevel):
         self.on_confirm = on_confirm
 
         self.title("컬럼 매핑 확인")
-        self.geometry("1260x580")
+        self.geometry("1340x580")
         self.minsize(1000, 480)
         self.configure(bg=COLORS["bg"])
         self.transient(parent)
@@ -425,8 +425,8 @@ class MappingDialog(tk.Toplevel):
                 side="left", padx=(0, 14))
 
         process_headers = {
-            "p_op": "Op.Press", "p_des": "Des.Press", "t_op": "Op.Temp",
-            "t_op_max": "Max Op.Temp", "t_min": "Min Des.Temp", "t_max": "Max Des.Temp",
+            "p_op": "Op.Press", "p_des_min": "Min Des.Press", "p_des_max": "Max Des.Press",
+            "t_op": "Op.Temp", "t_op_max": "Max Op.Temp", "t_min": "Min Des.Temp", "t_max": "Max Des.Temp",
         }
         columns = ["include", "file", "sheet", "family", "tag", "line", *engine.PROCESS_FIELDS, "status"]
         headers = ["포함", "파일", "시트", "구분", "Tag", "Line No",
@@ -449,6 +449,7 @@ class MappingDialog(tk.Toplevel):
         self.tree.tag_configure("warn", background=COLORS["row_warn"])
         self.tree.tag_configure("bad", background=COLORS["row_bad"])
         self.tree.tag_configure("master", font=("Segoe UI", 9, "bold"))
+        self.tree.tag_configure("sep", background=COLORS["bg"])
 
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Button-1>", self._on_click)
@@ -495,6 +496,10 @@ class MappingDialog(tk.Toplevel):
         self.tree.delete(*self.tree.get_children())
         self.tree.insert("", "end", iid="master", values=self._row_values(self.master_sm),
                           tags=(self._row_tag(self.master_sm), "master"))
+        # A blank spacer row visually separates the Line List (Master) row above
+        # from the Instrument sheet rows below.
+        blank = ("",) * len(self.tree["columns"])
+        self.tree.insert("", "end", iid="sep", values=blank, tags=("sep",))
         for i, sm in enumerate(self.sheet_mappings):
             self.tree.insert("", "end", iid=str(i), values=self._row_values(sm), tags=(self._row_tag(sm),))
 
@@ -506,7 +511,7 @@ class MappingDialog(tk.Toplevel):
         row = self.tree.identify_row(event.y)
         if not row or col != "#1":
             return
-        if row == "master":
+        if row in ("master", "sep"):
             return
         sm = self.sheet_mappings[int(row)]
         sm.include = not sm.include
@@ -517,7 +522,7 @@ class MappingDialog(tk.Toplevel):
         if col == "#1":
             return
         row = self.tree.identify_row(event.y)
-        if not row:
+        if not row or row == "sep":
             return
         if row == "master":
             sm, df = self.master_sm, self.master_df

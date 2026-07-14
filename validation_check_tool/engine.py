@@ -17,20 +17,21 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-PROCESS_FIELDS = ["p_op", "p_des", "t_op", "t_op_max", "t_min", "t_max"]
+PROCESS_FIELDS = ["p_op", "p_des_min", "p_des_max", "t_op", "t_op_max", "t_min", "t_max"]
 
 FIELD_LABELS = {
     "tag": "Tag No",
     "line": "Line No",
     "p_op": "Operating Pressure",
-    "p_des": "Design Pressure",
+    "p_des_min": "Min Design Pressure",
+    "p_des_max": "Max Design Pressure",
     "t_op": "Operating Temperature",
     "t_op_max": "Max Operating Temperature",
     "t_min": "Min Design Temperature",
     "t_max": "Max Design Temperature",
 }
 
-FIELD_ORDER = ["tag", "line", "p_des", "p_op", "t_max", "t_op_max", "t_min", "t_op"]
+FIELD_ORDER = ["tag", "line", "p_des_max", "p_des_min", "p_op", "t_max", "t_op_max", "t_min", "t_op"]
 
 
 def _has(text: str, *keywords: str) -> bool:
@@ -41,6 +42,26 @@ def _lacks(text: str, *keywords: str) -> bool:
     return not any(re.search(k, text) for k in keywords)
 
 
+def _match_p_op(t: str) -> bool:
+    if not _has(t, r"PRESS") or _has(t, r"DESIGN"):
+        return False
+    if _has(t, r"NOR(MAL)?"):
+        return True
+    # Some sheets have an unrelated Min/Nor/Max pressure range (e.g. an
+    # "Upstream Pressure" group) sitting next to Design Pressure. Without an
+    # explicit Normal/Operating label, only claim a column here if it isn't one
+    # of those Min/Max range columns.
+    return _lacks(t, r"\bMIN\b", r"\bMAX\b")
+
+
+def _match_t_op(t: str) -> bool:
+    if not _has(t, r"TEMP") or _has(t, r"DESIGN"):
+        return False
+    if _has(t, r"NOR(MAL)?"):
+        return True
+    return _lacks(t, r"\bMIN\b", r"\bMAX\b")
+
+
 # Header cells for grouped columns (e.g. a merged "Temperature" label above
 # separate "Operating"/"Design Minimum"/"Design Maximum" sub-columns) can put the
 # keywords in either order once concatenated top-to-bottom, so matching is done
@@ -48,12 +69,13 @@ def _lacks(text: str, *keywords: str) -> bool:
 FIELD_MATCHERS = {
     "tag": lambda t: bool(re.search(r"TAG", t)),
     "line": lambda t: bool(re.search(r"LINE", t)) or bool(re.search(r"P\s*&\s*ID\s*LINE", t)),
-    "p_des": lambda t: _has(t, r"PRESS", r"DESIGN"),
-    "p_op": lambda t: _has(t, r"PRESS") and _lacks(t, r"DESIGN"),
+    "p_des_max": lambda t: _has(t, r"PRESS", r"DESIGN", r"MAX"),
+    "p_des_min": lambda t: _has(t, r"PRESS", r"DESIGN", r"MIN"),
+    "p_op": _match_p_op,
     "t_max": lambda t: _has(t, r"TEMP", r"MAX", r"DESIGN"),
     "t_op_max": lambda t: _has(t, r"TEMP", r"MAX") and _lacks(t, r"DESIGN"),
-    "t_min": lambda t: _has(t, r"TEMP", r"MIN"),
-    "t_op": lambda t: _has(t, r"TEMP", r"OPER") and _lacks(t, r"MAX", r"MIN"),
+    "t_min": lambda t: _has(t, r"TEMP", r"MIN", r"DESIGN"),
+    "t_op": _match_t_op,
 }
 
 TAG_TYPE_KEYWORDS = ["FT", "FZT", "PT", "PG", "FV", "XV", "PSV"]
@@ -70,17 +92,22 @@ FAMILY_KEYWORDS = {
     "PSV": ["PSV", "PRV", "RUPTURE DISC"],
 }
 
+# These mirror the fixed columns the original script always assumed. "Min Design
+# Pressure" and "Max Operating Temperature" didn't exist as tracked fields back
+# then, so there's no legacy column for them - they're left for auto-detection /
+# manual mapping. The old single "Design Pressure" default is kept as the Max
+# Design Pressure default, since that's what it was actually being used for.
 DEFAULT_MAP = {
-    "FT": {"tag": "B", "line": "I", "p_op": "X", "p_des": "BM", "t_op": "AC", "t_min": "BP", "t_max": "BR"},
-    "PT": {"tag": "B", "line": "I", "p_op": "W", "p_des": "AW", "t_op": "AB", "t_min": "AZ", "t_max": "BB"},
-    "VALVE": {"tag": "B", "line": "I", "p_op": "W", "p_des": "BL", "t_op": "AF", "t_min": "BO", "t_max": "BQ"},
-    "PSV": {"tag": "B", "line": "J", "p_op": "R", "p_des": "AK", "t_op": "V", "t_min": "AN", "t_max": "AP"},
+    "FT": {"tag": "B", "line": "I", "p_op": "X", "p_des_max": "BM", "t_op": "AC", "t_min": "BP", "t_max": "BR"},
+    "PT": {"tag": "B", "line": "I", "p_op": "W", "p_des_max": "AW", "t_op": "AB", "t_min": "AZ", "t_max": "BB"},
+    "VALVE": {"tag": "B", "line": "I", "p_op": "W", "p_des_max": "BL", "t_op": "AF", "t_min": "BO", "t_max": "BQ"},
+    "PSV": {"tag": "B", "line": "J", "p_op": "R", "p_des_max": "AK", "t_op": "V", "t_min": "AN", "t_max": "AP"},
 }
 
-# Fallback used when the Line List's own headers don't match any FIELD_PATTERNS -
+# Fallback used when the Line List's own headers don't match any FIELD_MATCHERS -
 # this mirrors the fixed column layout the original script always assumed, so a
 # sheet auto-detection can't find columns for doesn't silently degrade to column A.
-MASTER_DEFAULT = {"line": "G", "p_op": "N", "p_des": "O", "t_op": "P", "t_min": "R", "t_max": "S"}
+MASTER_DEFAULT = {"line": "G", "p_op": "N", "p_des_max": "O", "t_op": "P", "t_min": "R", "t_max": "S"}
 
 
 # =====================================================
@@ -170,7 +197,8 @@ def compare_temp_op(master, inst) -> str:
 
 COMPARATORS = {
     "p_op": compare_pressure_op,
-    "p_des": compare_numeric,
+    "p_des_min": compare_numeric,
+    "p_des_max": compare_numeric,
     "t_op": compare_temp_op,
     "t_op_max": compare_numeric,
     "t_min": compare_numeric,
@@ -180,7 +208,7 @@ COMPARATORS = {
 # t_op is intentionally excluded from the overall PASS/FAIL verdict: it is very
 # often "AMB" on the line list against a real number on the datasheet, which is
 # an expected, not an erroneous, difference.
-FIELDS_IN_VERDICT = ["p_op", "p_des", "t_op_max", "t_min", "t_max"]
+FIELDS_IN_VERDICT = ["p_op", "p_des_min", "p_des_max", "t_op_max", "t_min", "t_max"]
 
 
 # =====================================================
@@ -260,8 +288,33 @@ def column_preview(df: pd.DataFrame, col_letter: str, max_len: int = 110) -> str
     return text
 
 
+def _column_looks_numeric(df: pd.DataFrame, col_idx: int, data_start: int,
+                           sample: int = 12, threshold: float = 0.5) -> bool:
+    """A header can accidentally say the right keyword (e.g. a "Description"
+    column reading "Pressure Transmitter") while holding text, not the actual
+    process value. Before trusting a header match for a numeric field, check
+    that the column's real data is actually numbers (allowing "AMB" for temps)."""
+    count = numeric = 0
+    for r in range(data_start, len(df)):
+        v = df.iat[r, col_idx]
+        if pd.isna(v):
+            continue
+        s = str(v).strip()
+        if not s:
+            continue
+        count += 1
+        if extract_numeric(s) is not None or s.upper() == "AMB":
+            numeric += 1
+        if count >= sample:
+            break
+    if count == 0:
+        return True
+    return numeric / count >= threshold
+
+
 def auto_detect_mapping(df: pd.DataFrame) -> dict[str, str]:
-    headers = build_header_text(df)
+    data_start = detect_header_row_count(df)
+    headers = build_header_text(df, data_start)
     used: set[int] = set()
     mapping: dict[str, str] = {}
     for f in FIELD_ORDER:
@@ -269,9 +322,12 @@ def auto_detect_mapping(df: pd.DataFrame) -> dict[str, str]:
         for c, h in enumerate(headers):
             if c in used or not h:
                 continue
-            if FIELD_MATCHERS[f](h):
-                found = c
-                break
+            if not FIELD_MATCHERS[f](h):
+                continue
+            if f in PROCESS_FIELDS and not _column_looks_numeric(df, c, data_start):
+                continue
+            found = c
+            break
         if found is not None:
             used.add(found)
             mapping[f] = index_to_col(found)
@@ -309,7 +365,8 @@ class SheetMapping:
 class MasterLine:
     line_no: str
     p_op: str
-    p_des: str
+    p_des_min: str
+    p_des_max: str
     t_op: str
     t_op_max: str
     t_min: str
@@ -322,7 +379,8 @@ class InstrumentRow:
     inst_type: str
     line_no: str
     p_op: str
-    p_des: str
+    p_des_min: str
+    p_des_max: str
     t_op: str
     t_op_max: str
     t_min: str
@@ -365,7 +423,8 @@ def load_master_lines(df: pd.DataFrame, mapping: dict) -> list[MasterLine]:
             MasterLine(
                 line_no=line_no,
                 p_op=clean(df.iat[r, idx["p_op"]]),
-                p_des=clean(df.iat[r, idx["p_des"]]),
+                p_des_min=clean(df.iat[r, idx["p_des_min"]]),
+                p_des_max=clean(df.iat[r, idx["p_des_max"]]),
                 t_op=clean(df.iat[r, idx["t_op"]]),
                 t_op_max=clean(df.iat[r, idx["t_op_max"]]),
                 t_min=clean(df.iat[r, idx["t_min"]]),
@@ -444,7 +503,8 @@ def load_instrument_rows(sheet_mappings: list[SheetMapping], df_cache: dict) -> 
                     inst_type=inst_type,
                     line_no=get("line"),
                     p_op=get("p_op"),
-                    p_des=get("p_des"),
+                    p_des_min=get("p_des_min"),
+                    p_des_max=get("p_des_max"),
                     t_op=get("t_op"),
                     t_op_max=get("t_op_max"),
                     t_min=get("t_min"),
@@ -488,7 +548,8 @@ HEADER_FONT = Font(color="FFFFFF", bold=True)
 
 PROCESS_FIELD_COLUMNS = [
     ("p_op", "P_Oper"),
-    ("p_des", "P_Design"),
+    ("p_des_min", "P_Design_Min"),
+    ("p_des_max", "P_Design_Max"),
     ("t_op", "T_Oper"),
     ("t_op_max", "T_Oper_Max"),
     ("t_min", "T_Min_Design"),
@@ -498,7 +559,7 @@ PROCESS_FIELD_COLUMNS = [
 REPORT_HEADERS = (
     ["Line No", "Tag No", "Type"]
     + [h for _, h in PROCESS_FIELD_COLUMNS]
-    + ["Source File", "Source Sheet", "Result"]
+    + ["Source File", "Source Sheet", "Result", "Remark"]
 )
 
 PROCESS_START_COL = 4
@@ -506,6 +567,7 @@ FIELD_COL = {f: PROCESS_START_COL + i for i, (f, _) in enumerate(PROCESS_FIELD_C
 SOURCE_FILE_COL = PROCESS_START_COL + len(PROCESS_FIELD_COLUMNS)
 SOURCE_SHEET_COL = SOURCE_FILE_COL + 1
 RESULT_COL = SOURCE_SHEET_COL + 1
+REMARK_COL = RESULT_COL + 1
 
 
 @dataclass
