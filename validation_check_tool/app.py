@@ -37,6 +37,8 @@ COLORS = {
     "row_ok": "#E6F4EA",
     "row_warn": "#FFF6E0",
     "row_bad": "#FBE7E7",
+    "row_manual": "#DBEAFE",
+    "manual_text": "#1D4ED8",
 }
 
 FIELDS_FOR_INSTRUMENT = ["tag", "line", *engine.PROCESS_FIELDS]
@@ -457,7 +459,8 @@ class MappingDialog(tk.Toplevel):
         legend.pack(anchor="w", pady=(6, 0))
         for text, color in [("자동/저장됨 인식 완료", COLORS["row_ok"]),
                              ("기본값 사용(확인 필요)", COLORS["row_warn"]),
-                             ("컬럼 미확인", COLORS["row_bad"])]:
+                             ("컬럼 미확인", COLORS["row_bad"]),
+                             ("수동 편집 포함 (* 표시)", COLORS["row_manual"])]:
             sw = tk.Label(legend, text="  ", bg=color, relief="solid", bd=1)
             sw.pack(side="left", padx=(0, 4))
             ttk.Label(legend, text=text, background=COLORS["bg"], style="Status.TLabel").pack(
@@ -487,6 +490,7 @@ class MappingDialog(tk.Toplevel):
         self.tree.tag_configure("ok", background=COLORS["row_ok"])
         self.tree.tag_configure("warn", background=COLORS["row_warn"])
         self.tree.tag_configure("bad", background=COLORS["row_bad"])
+        self.tree.tag_configure("manual", background=COLORS["row_manual"], foreground=COLORS["manual_text"])
         self.tree.tag_configure("master", font=("Segoe UI", 9, "bold"))
         self.tree.tag_configure("sep", background=COLORS["bg"])
 
@@ -504,18 +508,23 @@ class MappingDialog(tk.Toplevel):
         ttk.Button(bottom, text="확인 (매핑 저장)", style="Accent.TButton",
                    command=self._confirm).pack(side="right", padx=(0, 8))
 
+    def _cell_text(self, sm: engine.SheetMapping, f: str):
+        v = sm.mapping.get(f, "")
+        # Mark manually-edited columns so they stand out from auto-detected ones.
+        return f"{v} *" if v and sm.source.get(f) == "manual" else v
+
     def _row_values(self, sm: engine.SheetMapping):
         is_master = sm.key == engine.MASTER_KEY
         include_text = "필수" if is_master else ("✔ 포함" if sm.include else "✘ 제외")
-        tag = "-" if is_master else sm.mapping.get("tag", "")
+        tag = "-" if is_master else self._cell_text(sm, "tag")
         return (
             include_text,
             Path(sm.file).name,
             sm.sheet,
             sm.family or "미분류",
             tag,
-            sm.mapping.get("line", ""),
-            *[sm.mapping.get(f, "") for f in engine.PROCESS_FIELDS],
+            self._cell_text(sm, "line"),
+            *[self._cell_text(sm, f) for f in engine.PROCESS_FIELDS],
             self._status_text(sm),
         )
 
@@ -530,6 +539,8 @@ class MappingDialog(tk.Toplevel):
         sources = set(sm.source.values())
         if "missing" in sources:
             return "bad"
+        if "manual" in sources:
+            return "manual"
         if "default" in sources:
             return "warn"
         return "ok"
@@ -579,28 +590,37 @@ class MappingDialog(tk.Toplevel):
         EditRowDialog(self, sm, df, merges, lambda: self._refresh_row(row))
 
     def _on_motion(self, event):
-        if self.tree.identify_region(event.x, event.y) != "cell":
+        def hide():
             self._tooltip.hide()
+            self._tip_cell = None
+
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            hide()
             return
         row = self.tree.identify_row(event.y)
         col = self.tree.identify_column(event.x)
         if not row or row == "sep":
-            self._tooltip.hide()
+            hide()
             return
         columns = self.tree["columns"]
         try:
             field = columns[int(col.replace("#", "")) - 1]
         except (ValueError, IndexError):
-            self._tooltip.hide()
+            hide()
             return
         if field not in ("tag", "line", *engine.PROCESS_FIELDS):
-            self._tooltip.hide()
+            hide()
+            return
+        # Recompute the preview only when the hovered cell changes - motion
+        # events fire on every pixel and the preview scan isn't free.
+        if (row, col) == getattr(self, "_tip_cell", None) and self._tooltip.tip is not None:
             return
         sm, df, merges = self._row_context(row)
         col_letter = sm.mapping.get(field)
         if not col_letter or df is None:
-            self._tooltip.hide()
+            hide()
             return
+        self._tip_cell = (row, col)
         text = engine.column_preview(df, col_letter, merges)
         self._tooltip.show(text, event.x_root + 14, event.y_root + 14)
 
@@ -727,13 +747,19 @@ class EditRowDialog(tk.Toplevel):
             self._update_preview(f)
 
     def _save(self):
+        values = {}
         for f, entry in self.entries.items():
             val = entry.get().strip().upper()
             if not val:
                 messagebox.showwarning("입력 필요", f"{engine.FIELD_LABELS[f]} 컬럼을 입력하세요.")
                 return
-            self.sm.mapping[f] = val
-            self.sm.source[f] = "manual"
+            values[f] = val
+        for f, val in values.items():
+            # Only fields the user actually changed count as manual edits -
+            # re-saving an untouched auto-detected value keeps its status.
+            if val != self.sm.mapping.get(f):
+                self.sm.mapping[f] = val
+                self.sm.source[f] = "manual"
         self.destroy()
         self.on_saved()
 

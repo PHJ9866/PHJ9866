@@ -55,6 +55,10 @@ def _match_p_des_max(t: str) -> bool:
 def _match_p_op(t: str) -> bool:
     if not _has(t, r"PRESS") or _has(t, r"DESIGN"):
         return False
+    # Hydrotest/strength-test pressure columns also read "... Pressure" but are
+    # never the operating pressure.
+    if not _lacks(t, r"TEST", r"STRENGTH", r"HYDRO"):
+        return False
     if _has(t, r"NOR(MAL)?"):
         return True
     # Some sheets have an unrelated Min/Nor/Max pressure range (e.g. an
@@ -246,23 +250,27 @@ def detect_header_row_count(df: pd.DataFrame, max_rows: int = 40, confirm_rows: 
     return limit
 
 
-def get_merged_ranges(file_path: str, sheet_name: str) -> list[tuple[int, int, int, int]]:
-    """0-indexed (min_row, min_col, max_row, max_col) for every merged range on
-    a sheet. Used to correctly propagate a merged group header (e.g. "Pressure"
-    spanning several columns, whose text openpyxl/pandas only report on the
-    top-left cell) onto every column it visually covers - without guessing via
-    forward-fill, which can't tell a real merge apart from an unrelated blank
-    column sitting next to a label."""
+def get_merged_ranges_map(file_path: str) -> dict[str, list[tuple[int, int, int, int]]]:
+    """0-indexed (min_row, min_col, max_row, max_col) merged ranges for EVERY
+    sheet of a workbook, collected in a single load. Used to correctly propagate
+    a merged group header (e.g. "Pressure" spanning several columns, whose text
+    openpyxl/pandas only report on the top-left cell) onto every column it
+    visually covers - without guessing via forward-fill, which can't tell a real
+    merge apart from an unrelated blank column sitting next to a label.
+
+    merged_cells is not exposed in read_only mode, so this has to be a normal
+    (in-memory) load - which is why it must happen once per FILE: loading the
+    whole workbook again for every sheet made scanning large files painfully slow."""
     try:
-        # merged_cells is not exposed in read_only mode, so this has to be a
-        # normal (in-memory) load.
         wb = load_workbook(file_path, data_only=True)
-        ws = wb[sheet_name]
-        ranges = [(r.min_row - 1, r.min_col - 1, r.max_row - 1, r.max_col - 1) for r in ws.merged_cells.ranges]
-        wb.close()
-        return ranges
     except Exception:
-        return []
+        return {}
+    result = {}
+    for ws in wb.worksheets:
+        result[ws.title] = [(r.min_row - 1, r.min_col - 1, r.max_row - 1, r.max_col - 1)
+                            for r in ws.merged_cells.ranges]
+    wb.close()
+    return result
 
 
 def _effective_header_grid(df: pd.DataFrame, n_rows: int,
@@ -338,12 +346,25 @@ def column_preview(df: pd.DataFrame, col_letter: str,
     return text
 
 
+# Non-numeric placeholders that legitimately appear in process-data columns:
+# AMB(ient), ATM(ospheric), F.V (full vacuum), VAC(uum), N/A. Compared after
+# stripping dots/spaces so "F.V", "F.V." and "FV" all normalize the same.
+NON_NUMERIC_PROCESS_VALUES = {"AMB", "ATM", "FV", "VAC", "FULLVACUUM", "N/A", "NA", "-"}
+
+
+def _is_process_value(s: str) -> bool:
+    if extract_numeric(s) is not None:
+        return True
+    return s.upper().replace(".", "").replace(" ", "") in NON_NUMERIC_PROCESS_VALUES
+
+
 def _column_looks_numeric(df: pd.DataFrame, col_idx: int, data_start: int,
                            sample: int = 12, threshold: float = 0.5) -> bool:
     """A header can accidentally say the right keyword (e.g. a "Description"
     column reading "Pressure Transmitter") while holding text, not the actual
     process value. Before trusting a header match for a numeric field, check
-    that the column's real data is actually numbers (allowing "AMB" for temps)."""
+    that the column's real data is actually process values (numbers, plus
+    placeholders like ATM/AMB/F.V)."""
     count = numeric = 0
     for r in range(data_start, len(df)):
         v = df.iat[r, col_idx]
@@ -353,22 +374,23 @@ def _column_looks_numeric(df: pd.DataFrame, col_idx: int, data_start: int,
         if not s:
             continue
         count += 1
-        if extract_numeric(s) is not None or s.upper() == "AMB":
+        if _is_process_value(s):
             numeric += 1
         if count >= sample:
             break
     if count == 0:
-        return True
+        # An empty column tells us nothing and maps to nothing useful - reject
+        # the header match so the search continues (or falls back to defaults),
+        # instead of letting e.g. an unused "LINE FLUID" column win.
+        return False
     return numeric / count >= threshold
 
 
-def _column_looks_like_line_no(df: pd.DataFrame, col_idx: int, data_start: int,
-                                sample: int = 12, threshold: float = 0.5) -> bool:
-    """Same idea as _column_looks_numeric, but for the Line No column: a wide
-    Line List can have unrelated columns elsewhere whose header text happens to
-    contain the word "Line" (insulation line, tracing line, ...). Real line
-    numbers have a distinctive dash-separated shape (e.g. "301-ATM-0007"), so
-    require that shape in the actual data before trusting a header match."""
+def _line_no_stats(df: pd.DataFrame, col_idx: int, data_start: int,
+                    sample: int = 12) -> tuple[int, int]:
+    """Counts how many of a column's first data values have the distinctive
+    line-number shape: dash-separated with 3+ parts and at least one letter
+    (e.g. "301-ATM-0007"). Returns (values seen, values matching)."""
     count = matches = 0
     for r in range(data_start, len(df)):
         v = df.iat[r, col_idx]
@@ -378,12 +400,22 @@ def _column_looks_like_line_no(df: pd.DataFrame, col_idx: int, data_start: int,
         if not s:
             continue
         count += 1
-        if len(s.split("-")) >= 3:
+        if len(s.split("-")) >= 3 and re.search(r"[A-Za-z]", s):
             matches += 1
         if count >= sample:
             break
+    return count, matches
+
+
+def _column_looks_like_line_no(df: pd.DataFrame, col_idx: int, data_start: int,
+                                threshold: float = 0.5) -> bool:
+    """Same idea as _column_looks_numeric, but for the Line No column: a wide
+    Line List can have unrelated columns elsewhere whose header text happens to
+    contain the word "Line" (insulation line, LINE FLUID, ...). Require the
+    actual data to look like line numbers - and reject empty columns outright."""
+    count, matches = _line_no_stats(df, col_idx, data_start)
     if count == 0:
-        return True
+        return False
     return matches / count >= threshold
 
 
@@ -439,6 +471,20 @@ def auto_detect_mapping(df: pd.DataFrame, merges: list[tuple[int, int, int, int]
         if found is not None:
             used.add(found)
             mapping[f] = index_to_col(found)
+
+    if "line" not in mapping:
+        # A Line List's line-number column often carries an unhelpful header
+        # like "No", which no keyword can find. Fall back to recognizing the
+        # data itself: dash-separated identifiers containing letters
+        # ("301-ATM-0007"), taking the leftmost strongly-matching column.
+        for c in range(n):
+            if c in used:
+                continue
+            count, matches = _line_no_stats(df, c, data_start)
+            if count >= 2 and matches / count >= 0.7:
+                mapping["line"] = index_to_col(c)
+                used.add(c)
+                break
     return mapping
 
 
@@ -503,9 +549,10 @@ MASTER_KEY = "__MASTER__"
 
 
 def scan_master_file(master_file: str, saved_config: dict) -> tuple[SheetMapping, pd.DataFrame, list]:
-    df = pd.read_excel(master_file, sheet_name=0, header=None)
     xl = pd.ExcelFile(master_file)
-    merges = get_merged_ranges(master_file, xl.sheet_names[0])
+    first_sheet = xl.sheet_names[0]
+    df = xl.parse(first_sheet, header=None)
+    merges = get_merged_ranges_map(master_file).get(first_sheet, [])
     if MASTER_KEY in saved_config:
         mapping = dict(saved_config[MASTER_KEY])
         source = {f: "saved" for f in mapping}
@@ -557,12 +604,15 @@ def scan_instrument_files(files: list[str], saved_config: dict, progress=None) -
             xl = pd.ExcelFile(file)
         except Exception:
             continue
+        # One workbook load per FILE for merged-cell info - loading it once per
+        # sheet made scanning large multi-sheet files unbearably slow.
+        merges_by_sheet = get_merged_ranges_map(file)
         for sheet in xl.sheet_names:
             if progress:
                 progress(f"스캔 중: {Path(file).name} - {sheet}")
             df = xl.parse(sheet, header=None)
             df_cache[(file, sheet)] = df
-            merges = get_merged_ranges(file, sheet)
+            merges = merges_by_sheet.get(sheet, [])
             merge_cache[(file, sheet)] = merges
 
             key = normalize_sheet_name(sheet)
