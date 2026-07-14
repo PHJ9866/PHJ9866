@@ -398,7 +398,7 @@ class MappingDialog(tk.Toplevel):
         self.on_confirm = on_confirm
 
         self.title("컬럼 매핑 확인")
-        self.geometry("1340x580")
+        self.geometry("1260x580")
         self.minsize(1000, 480)
         self.configure(bg=COLORS["bg"])
         self.transient(parent)
@@ -425,7 +425,7 @@ class MappingDialog(tk.Toplevel):
                 side="left", padx=(0, 14))
 
         process_headers = {
-            "p_op": "Op.Press", "p_des_min": "Min Des.Press", "p_des_max": "Max Des.Press",
+            "p_op": "Op.Press", "p_des_max": "Max Des.Press",
             "t_op": "Op.Temp", "t_op_max": "Max Op.Temp", "t_min": "Min Des.Temp", "t_max": "Max Des.Temp",
         }
         columns = ["include", "file", "sheet", "family", "tag", "line", *engine.PROCESS_FIELDS, "status"]

@@ -17,13 +17,12 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-PROCESS_FIELDS = ["p_op", "p_des_min", "p_des_max", "t_op", "t_op_max", "t_min", "t_max"]
+PROCESS_FIELDS = ["p_op", "p_des_max", "t_op", "t_op_max", "t_min", "t_max"]
 
 FIELD_LABELS = {
     "tag": "Tag No",
     "line": "Line No",
     "p_op": "Operating Pressure",
-    "p_des_min": "Min Design Pressure",
     "p_des_max": "Max Design Pressure",
     "t_op": "Operating Temperature",
     "t_op_max": "Max Operating Temperature",
@@ -31,7 +30,7 @@ FIELD_LABELS = {
     "t_max": "Max Design Temperature",
 }
 
-FIELD_ORDER = ["tag", "line", "p_des_max", "p_des_min", "p_op", "t_max", "t_op_max", "t_min", "t_op"]
+FIELD_ORDER = ["tag", "line", "p_des_max", "p_op", "t_max", "t_op_max", "t_min", "t_op"]
 
 
 def _has(text: str, *keywords: str) -> bool:
@@ -40,6 +39,17 @@ def _has(text: str, *keywords: str) -> bool:
 
 def _lacks(text: str, *keywords: str) -> bool:
     return not any(re.search(k, text) for k in keywords)
+
+
+def _match_p_des_max(t: str) -> bool:
+    if not _has(t, r"PRESS", r"DESIGN"):
+        return False
+    if _has(t, r"MAX"):
+        return True
+    # Some Line Lists only have a single, unqualified "Design Pressure" column
+    # (no Min/Max split) - treat that as the max design rating, but don't steal
+    # a column that's explicitly labelled as the design *minimum*.
+    return _lacks(t, r"\bMIN\b")
 
 
 def _match_p_op(t: str) -> bool:
@@ -69,8 +79,7 @@ def _match_t_op(t: str) -> bool:
 FIELD_MATCHERS = {
     "tag": lambda t: bool(re.search(r"TAG", t)),
     "line": lambda t: bool(re.search(r"LINE", t)) or bool(re.search(r"P\s*&\s*ID\s*LINE", t)),
-    "p_des_max": lambda t: _has(t, r"PRESS", r"DESIGN", r"MAX"),
-    "p_des_min": lambda t: _has(t, r"PRESS", r"DESIGN", r"MIN"),
+    "p_des_max": _match_p_des_max,
     "p_op": _match_p_op,
     "t_max": lambda t: _has(t, r"TEMP", r"MAX", r"DESIGN"),
     "t_op_max": lambda t: _has(t, r"TEMP", r"MAX") and _lacks(t, r"DESIGN"),
@@ -197,7 +206,6 @@ def compare_temp_op(master, inst) -> str:
 
 COMPARATORS = {
     "p_op": compare_pressure_op,
-    "p_des_min": compare_numeric,
     "p_des_max": compare_numeric,
     "t_op": compare_temp_op,
     "t_op_max": compare_numeric,
@@ -208,7 +216,7 @@ COMPARATORS = {
 # t_op is intentionally excluded from the overall PASS/FAIL verdict: it is very
 # often "AMB" on the line list against a real number on the datasheet, which is
 # an expected, not an erroneous, difference.
-FIELDS_IN_VERDICT = ["p_op", "p_des_min", "p_des_max", "t_op_max", "t_min", "t_max"]
+FIELDS_IN_VERDICT = ["p_op", "p_des_max", "t_op_max", "t_min", "t_max"]
 
 
 # =====================================================
@@ -365,7 +373,6 @@ class SheetMapping:
 class MasterLine:
     line_no: str
     p_op: str
-    p_des_min: str
     p_des_max: str
     t_op: str
     t_op_max: str
@@ -379,7 +386,6 @@ class InstrumentRow:
     inst_type: str
     line_no: str
     p_op: str
-    p_des_min: str
     p_des_max: str
     t_op: str
     t_op_max: str
@@ -423,7 +429,6 @@ def load_master_lines(df: pd.DataFrame, mapping: dict) -> list[MasterLine]:
             MasterLine(
                 line_no=line_no,
                 p_op=clean(df.iat[r, idx["p_op"]]),
-                p_des_min=clean(df.iat[r, idx["p_des_min"]]),
                 p_des_max=clean(df.iat[r, idx["p_des_max"]]),
                 t_op=clean(df.iat[r, idx["t_op"]]),
                 t_op_max=clean(df.iat[r, idx["t_op_max"]]),
@@ -503,7 +508,6 @@ def load_instrument_rows(sheet_mappings: list[SheetMapping], df_cache: dict) -> 
                     inst_type=inst_type,
                     line_no=get("line"),
                     p_op=get("p_op"),
-                    p_des_min=get("p_des_min"),
                     p_des_max=get("p_des_max"),
                     t_op=get("t_op"),
                     t_op_max=get("t_op_max"),
@@ -548,7 +552,6 @@ HEADER_FONT = Font(color="FFFFFF", bold=True)
 
 PROCESS_FIELD_COLUMNS = [
     ("p_op", "P_Oper"),
-    ("p_des_min", "P_Design_Min"),
     ("p_des_max", "P_Design_Max"),
     ("t_op", "T_Oper"),
     ("t_op_max", "T_Oper_Max"),
@@ -559,13 +562,12 @@ PROCESS_FIELD_COLUMNS = [
 REPORT_HEADERS = (
     ["Line No", "Tag No", "Type"]
     + [h for _, h in PROCESS_FIELD_COLUMNS]
-    + ["Source File", "Source Sheet", "Result", "Remark"]
+    + ["Source Sheet", "Result", "Remark"]
 )
 
 PROCESS_START_COL = 4
 FIELD_COL = {f: PROCESS_START_COL + i for i, (f, _) in enumerate(PROCESS_FIELD_COLUMNS)}
-SOURCE_FILE_COL = PROCESS_START_COL + len(PROCESS_FIELD_COLUMNS)
-SOURCE_SHEET_COL = SOURCE_FILE_COL + 1
+SOURCE_SHEET_COL = PROCESS_START_COL + len(PROCESS_FIELD_COLUMNS)
 RESULT_COL = SOURCE_SHEET_COL + 1
 REMARK_COL = RESULT_COL + 1
 
@@ -607,12 +609,16 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
         for f in PROCESS_FIELDS:
             ws.cell(excel_row, FIELD_COL[f], getattr(line, f))
         for c in range(1, n_cols + 1):
+            if c == REMARK_COL:
+                continue
             ws.cell(excel_row, c).fill = GRAY
         excel_row += 1
 
         if not matches:
-            ws.cell(excel_row, 3, "MISSING")
+            ws.cell(excel_row, 3, "No Related Item")
             for c in range(1, n_cols + 1):
+                if c == REMARK_COL:
+                    continue
                 ws.cell(excel_row, c).fill = YELLOW
             excel_row += 1
             stats.missing_lines += 1
@@ -629,7 +635,6 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
             ws.cell(excel_row, 3, inst.inst_type)
             for f in PROCESS_FIELDS:
                 ws.cell(excel_row, FIELD_COL[f], getattr(inst, f))
-            ws.cell(excel_row, SOURCE_FILE_COL, inst.source_file)
             ws.cell(excel_row, SOURCE_SHEET_COL, inst.source_sheet)
             ws.cell(excel_row, RESULT_COL, final)
 

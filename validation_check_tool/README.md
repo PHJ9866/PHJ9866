@@ -26,7 +26,7 @@ python app.py
 
 1. **① Line List (Master) 파일**: Line No / Process Data가 있는 Excel 파일을 선택합니다.
 2. **② Instrument Datasheet 파일**: 여러 개 선택할 수 있고, 파일 안의 모든 시트를 자동으로 참조합니다.
-3. **③ 스캔 & 매핑 확인**: Tag No, Line No와 Process Data 7종 컬럼을 시트별로 자동 인식합니다.
+3. **③ 스캔 & 매핑 확인**: Tag No, Line No와 Process Data 6종 컬럼을 시트별로 자동 인식합니다.
    Line List(Master) 행이 맨 위에, 그 아래로 한 칸 띄운 뒤 Instrument 시트들이 나열됩니다.
    - 초록색 행: 자동/저장된 매핑으로 정상 인식됨
    - 노란색 행: 시트 이름으로 유추한 기본값을 사용 중 (확인 필요)
@@ -37,24 +37,24 @@ python app.py
 4. **④ Report 생성**: 저장 경로를 지정하면 Validation Report(.xlsx)가 생성됩니다.
    - Line별로 Master 행(회색) + 매칭되는 Instrument 행이 나열됩니다.
    - Process Data가 다르면 빨간색, 같으면 초록색으로 표시됩니다.
-   - 매칭되는 Instrument가 없는 Line은 노란색 "MISSING"으로 표시됩니다.
-   - 맨 끝 `Remark` 열은 항상 비워둔 채로 생성되어, 검토하면서 메모를 남길 수 있습니다.
+   - 매칭되는 Instrument가 없는 Line은 노란색 "No Related Item"으로 표시됩니다.
+   - 맨 끝 `Remark` 열은 색칠 없이 흰 배경으로 생성되어, 검토하면서 메모를 남길 수 있습니다.
    - `Summary` 시트에 전체 통계가 함께 저장됩니다.
 
-## Process Data (7종)
+## Process Data (6종)
 
-Operating Pressure, Min Design Pressure, Max Design Pressure, Operating Temperature,
+Operating Pressure, Max Design Pressure, Operating Temperature,
 Max Operating Temperature, Min Design Temperature, Max Design Temperature
 
-Validation 시트에서는 Line No / Tag No / Type 다음, `P_Oper` → `P_Design_Min` → `P_Design_Max` →
-`T_Oper` → `T_Oper_Max` → `T_Min_Design` → `T_Max_Design` 순으로 배치됩니다.
+Validation 시트에서는 Line No / Tag No / Type 다음, `P_Oper` → `P_Design_Max` →
+`T_Oper` → `T_Oper_Max` → `T_Min_Design` → `T_Max_Design` → Source Sheet → Result → Remark 순으로 배치됩니다.
 
 ## 비교 규칙
 
 - Operating Pressure: Master 값이 `10~15` 같은 범위면 Instrument 값이 그 범위 안에 있으면 PASS
-- Design Pressure(Min/Max) / Max Operating Temperature / Min·Max Design Temperature: 허용 오차(0.05) 이내면 PASS
+- Max Design Pressure / Max Operating Temperature / Min·Max Design Temperature: 허용 오차(0.05) 이내면 PASS
 - Operating Temperature: Master 값이 `AMB`면 N/A 처리, 그 외에는 문자열 완전 일치
-- 최종 PASS/FAIL은 Operating Pressure, Min/Max Design Pressure, Max Operating Temperature,
+- 최종 PASS/FAIL은 Operating Pressure, Max Design Pressure, Max Operating Temperature,
   Min/Max Design Temperature 기준으로 판정됩니다 (Operating Temperature는 AMB 표기가 흔해 판정에서 제외)
 
 ## 컬럼 자동 인식이 실패하기 쉬운 경우와 대응
