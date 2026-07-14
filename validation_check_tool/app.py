@@ -324,9 +324,15 @@ class MainApp(tk.Tk):
             master_lines = engine.load_master_lines(self.master_df, self.master_sm.mapping)
             self.log(f"Line 개수: {len(master_lines)}")
 
+            if not master_lines:
+                self.after(0, self._on_master_empty)
+                return
+
             self.log("Instrument 데이터 로딩...")
             instrument_rows = engine.load_instrument_rows(self.sheet_mappings, self.df_cache)
             self.log(f"Instrument 개수: {len(instrument_rows)}")
+            if not instrument_rows:
+                self.log("경고: 매칭된 Instrument가 0개입니다. Instrument 시트의 Line/Tag 매핑을 확인하세요.", "err")
 
             def progress_cb(msg):
                 self.log(msg)
@@ -335,6 +341,18 @@ class MainApp(tk.Tk):
             self.after(0, lambda: self._on_report_done(stats, output_path))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _on_master_empty(self):
+        self.generate_btn.configure(state="normal")
+        self.set_status("대기 중")
+        self.log("Line List에서 Line No를 하나도 찾지 못했습니다.", "err")
+        messagebox.showerror(
+            "Line List 인식 실패",
+            "Line List 파일에서 Line No를 하나도 찾지 못해서 리포트가 비어있게 됩니다.\n\n"
+            "③ 스캔 & 매핑 확인 화면에서 'Line List (Master)' 행을 더블클릭해\n"
+            "Line No 컬럼(그리고 Process Data 컬럼)이 실제 파일과 맞는지 확인해 주세요.\n"
+            "오른쪽에 뜨는 미리보기 값으로 맞는 컬럼인지 확인할 수 있어요."
+        )
 
     def _on_report_done(self, stats: engine.ReportStats, output_path: str):
         self.generate_btn.configure(state="normal")
@@ -588,7 +606,8 @@ class EditRowDialog(tk.Toplevel):
         if self.df is None:
             return
         auto_map = engine.auto_detect_mapping(self.df)
-        mapping, _ = engine.resolve_mapping(self.sm.family, auto_map)
+        default = engine.MASTER_DEFAULT if self.sm.key == engine.MASTER_KEY else engine.DEFAULT_MAP.get(self.sm.family, {})
+        mapping, _ = engine.resolve_mapping(default, auto_map)
         for f, entry in self.entries.items():
             entry.delete(0, "end")
             entry.insert(0, mapping.get(f, ""))

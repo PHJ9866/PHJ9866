@@ -35,10 +35,10 @@ FIELD_PATTERNS = {
     "tag": [r"TAG\s*(NO\.?|NUMBER)?\b", r"INSTRUMENT\s*(TAG|NO)"],
     "line": [r"LINE\s*(NO\.?|NUMBER)?\b", r"P\s*&\s*ID\s*LINE"],
     "p_des": [r"DESIGN\s*PRESS"],
-    "p_op": [r"OPERAT\w*\s*PRESS", r"NORMAL\s*PRESS"],
+    "p_op": [r"OPER\w*\.?\s*PRESS", r"NORMAL\s*PRESS"],
     "t_min": [r"MIN\w*\.?\s*(DESIGN\s*)?TEMP"],
     "t_max": [r"MAX\w*\.?\s*(DESIGN\s*)?TEMP"],
-    "t_op": [r"OPERAT\w*\s*TEMP"],
+    "t_op": [r"OPER\w*\.?\s*TEMP"],
 }
 
 TAG_TYPE_KEYWORDS = ["FT", "FZT", "PT", "PG", "FV", "XV", "PSV"]
@@ -61,6 +61,11 @@ DEFAULT_MAP = {
     "VALVE": {"tag": "B", "line": "I", "p_op": "W", "p_des": "BL", "t_op": "AF", "t_min": "BO", "t_max": "BQ"},
     "PSV": {"tag": "B", "line": "J", "p_op": "R", "p_des": "AK", "t_op": "V", "t_min": "AN", "t_max": "AP"},
 }
+
+# Fallback used when the Line List's own headers don't match any FIELD_PATTERNS -
+# this mirrors the fixed column layout the original script always assumed, so a
+# sheet auto-detection can't find columns for doesn't silently degrade to column A.
+MASTER_DEFAULT = {"line": "G", "p_op": "N", "p_des": "O", "t_op": "P", "t_min": "R", "t_max": "S"}
 
 
 # =====================================================
@@ -220,8 +225,7 @@ def auto_detect_mapping(df: pd.DataFrame) -> dict[str, str]:
     return mapping
 
 
-def resolve_mapping(family: str | None, auto_map: dict[str, str]) -> tuple[dict, dict]:
-    default = DEFAULT_MAP.get(family, {}) if family else {}
+def resolve_mapping(default: dict[str, str], auto_map: dict[str, str]) -> tuple[dict, dict]:
     mapping, source = {}, {}
     for f in ["tag", "line", *PROCESS_FIELDS]:
         if f in auto_map:
@@ -286,7 +290,7 @@ def scan_master_file(master_file: str, saved_config: dict) -> tuple[SheetMapping
         source = {f: "saved" for f in mapping}
     else:
         auto_map = auto_detect_mapping(df)
-        mapping, source = resolve_mapping(None, auto_map)
+        mapping, source = resolve_mapping(MASTER_DEFAULT, auto_map)
     sm = SheetMapping(file=master_file, sheet="Line List", key=MASTER_KEY,
                        family="MASTER", mapping=mapping, source=source, include=True)
     return sm, df
@@ -344,7 +348,7 @@ def scan_instrument_files(files: list[str], saved_config: dict, progress=None) -
                 source = {f: "saved" for f in mapping}
             else:
                 auto_map = auto_detect_mapping(df)
-                mapping, source = resolve_mapping(family, auto_map)
+                mapping, source = resolve_mapping(DEFAULT_MAP.get(family, {}), auto_map)
 
             include = family is not None or any(s == "auto" for s in source.values())
             results.append(SheetMapping(file=file, sheet=sheet, key=key, family=family,
