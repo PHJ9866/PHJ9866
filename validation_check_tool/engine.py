@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -78,7 +78,7 @@ def _match_t_op(t: str) -> bool:
 # by presence/absence of each keyword rather than a fixed left-to-right sequence.
 FIELD_MATCHERS = {
     "tag": lambda t: bool(re.search(r"TAG", t)),
-    "line": lambda t: bool(re.search(r"LINE", t)) or bool(re.search(r"P\s*&\s*ID\s*LINE", t)),
+    "line": lambda t: bool(re.search(r"\bLINE\b", t)),
     "p_des_max": _match_p_des_max,
     "p_op": _match_p_op,
     "t_max": lambda t: _has(t, r"TEMP", r"MAX", r"DESIGN"),
@@ -246,24 +246,60 @@ def detect_header_row_count(df: pd.DataFrame, max_rows: int = 40, confirm_rows: 
     return limit
 
 
-def build_header_text(df: pd.DataFrame, header_rows: int | None = None) -> list[str]:
+def get_merged_ranges(file_path: str, sheet_name: str) -> list[tuple[int, int, int, int]]:
+    """0-indexed (min_row, min_col, max_row, max_col) for every merged range on
+    a sheet. Used to correctly propagate a merged group header (e.g. "Pressure"
+    spanning several columns, whose text openpyxl/pandas only report on the
+    top-left cell) onto every column it visually covers - without guessing via
+    forward-fill, which can't tell a real merge apart from an unrelated blank
+    column sitting next to a label."""
+    try:
+        # merged_cells is not exposed in read_only mode, so this has to be a
+        # normal (in-memory) load.
+        wb = load_workbook(file_path, data_only=True)
+        ws = wb[sheet_name]
+        ranges = [(r.min_row - 1, r.min_col - 1, r.max_row - 1, r.max_col - 1) for r in ws.merged_cells.ranges]
+        wb.close()
+        return ranges
+    except Exception:
+        return []
+
+
+def _effective_header_grid(df: pd.DataFrame, n_rows: int,
+                            merges: list[tuple[int, int, int, int]] | None) -> list[list]:
+    """Header cell values for rows [0, n_rows), with merged-cell group labels
+    copied onto every column their merge spans (instead of just the top-left
+    cell where openpyxl/pandas actually store the value)."""
+    ncols = df.shape[1]
+    grid = [[df.iat[r, c] if pd.notna(df.iat[r, c]) else None for c in range(ncols)] for r in range(n_rows)]
+    for min_row, min_col, max_row, max_col in (merges or []):
+        if max_row < 0 or min_row >= n_rows or max_col < min_col or min_row >= len(df):
+            continue
+        top_val = df.iat[min_row, min_col] if pd.notna(df.iat[min_row, min_col]) else None
+        if top_val is None:
+            continue
+        for r in range(max(min_row, 0), min(max_row, n_rows - 1) + 1):
+            for c in range(min_col, min(max_col, ncols - 1) + 1):
+                grid[r][c] = top_val
+    return grid
+
+
+def build_header_text(df: pd.DataFrame, header_rows: int | None = None,
+                       merges: list[tuple[int, int, int, int]] | None = None) -> list[str]:
     if header_rows is None:
         header_rows = detect_header_row_count(df)
     n = min(header_rows, len(df))
     if n == 0:
         return ["" for _ in range(df.shape[1])]
 
-    # Forward-fill each header row left-to-right so a merged group label (e.g.
-    # "Temperature" spanning several columns, stored only in the leftmost cell)
-    # propagates onto every column it visually covers, instead of only the first.
-    filled = df.iloc[:n].apply(lambda row: row.ffill(), axis=1)
+    grid = _effective_header_grid(df, n, merges)
 
     headers = []
     for c in range(df.shape[1]):
         parts = []
         for r in range(n):
-            v = filled.iat[r, c]
-            if pd.notna(v):
+            v = grid[r][c]
+            if v is not None:
                 s = str(v).strip()
                 if s and s not in parts:
                     parts.append(s)
@@ -271,18 +307,24 @@ def build_header_text(df: pd.DataFrame, header_rows: int | None = None) -> list[
     return headers
 
 
-def column_preview(df: pd.DataFrame, col_letter: str, max_len: int = 110) -> str:
+def column_preview(df: pd.DataFrame, col_letter: str,
+                    merges: list[tuple[int, int, int, int]] | None = None, max_len: int = 110) -> str:
     """Human-readable preview of a column: its header text plus one sample value,
     used in the GUI so the user can sanity-check a mapping without opening Excel."""
     idx = col_to_index(col_letter)
     if idx < 0 or idx >= df.shape[1]:
         return "(범위 밖)"
     header_rows = detect_header_row_count(df)
-    header = " / ".join(
-        str(df.iat[r, idx]).strip()
-        for r in range(min(header_rows, len(df)))
-        if pd.notna(df.iat[r, idx]) and str(df.iat[r, idx]).strip()
-    )
+    n = min(header_rows, len(df))
+    grid = _effective_header_grid(df, n, merges)
+    parts = []
+    for r in range(n):
+        v = grid[r][idx]
+        if v is not None:
+            s = str(v).strip()
+            if s and s not in parts:
+                parts.append(s)
+    header = " / ".join(parts)
     sample = ""
     for r in range(header_rows, len(df)):
         v = df.iat[r, idx]
@@ -320,19 +362,77 @@ def _column_looks_numeric(df: pd.DataFrame, col_idx: int, data_start: int,
     return numeric / count >= threshold
 
 
-def auto_detect_mapping(df: pd.DataFrame) -> dict[str, str]:
+def _column_looks_like_line_no(df: pd.DataFrame, col_idx: int, data_start: int,
+                                sample: int = 12, threshold: float = 0.5) -> bool:
+    """Same idea as _column_looks_numeric, but for the Line No column: a wide
+    Line List can have unrelated columns elsewhere whose header text happens to
+    contain the word "Line" (insulation line, tracing line, ...). Real line
+    numbers have a distinctive dash-separated shape (e.g. "301-ATM-0007"), so
+    require that shape in the actual data before trusting a header match."""
+    count = matches = 0
+    for r in range(data_start, len(df)):
+        v = df.iat[r, col_idx]
+        if pd.isna(v):
+            continue
+        s = str(v).strip()
+        if not s:
+            continue
+        count += 1
+        if len(s.split("-")) >= 3:
+            matches += 1
+        if count >= sample:
+            break
+    if count == 0:
+        return True
+    return matches / count >= threshold
+
+
+# A wide Line List / datasheet can have plenty of unrelated columns whose header
+# text loosely matches a field's keywords (e.g. a hydrotest pressure column also
+# containing the word "Pressure"). On a Line List, Operating and Design Pressure
+# are almost always right next to each other, so once the more tightly-matched
+# field is found, columns near it are tried first - but a Line List and an
+# Instrument datasheet aren't equally compact (a datasheet can have Operating
+# and Design Pressure many columns apart, e.g. with UOM/flag sub-columns in
+# between), so this only reorders the search rather than ruling out distant
+# columns entirely; the numeric-data check is what actually rejects unrelated
+# columns like a "Hydrotest Pressure" value.
+PROXIMITY_ANCHOR = {"p_op": "p_des_max", "t_op": "t_max", "t_op_max": "t_max"}
+PROXIMITY_WINDOW = 10
+
+
+def _columns_by_proximity(n_cols: int, anchor: int, window: int = PROXIMITY_WINDOW) -> list[int]:
+    near = []
+    for d in range(window + 1):
+        for c in (anchor - d, anchor + d) if d else (anchor,):
+            if 0 <= c < n_cols and c not in near:
+                near.append(c)
+    rest = [c for c in range(n_cols) if c not in near]
+    return near + rest
+
+
+def auto_detect_mapping(df: pd.DataFrame, merges: list[tuple[int, int, int, int]] | None = None) -> dict[str, str]:
     data_start = detect_header_row_count(df)
-    headers = build_header_text(df, data_start)
+    headers = build_header_text(df, data_start, merges)
+    n = len(headers)
     used: set[int] = set()
     mapping: dict[str, str] = {}
     for f in FIELD_ORDER:
+        anchor_field = PROXIMITY_ANCHOR.get(f)
+        anchor_col = mapping.get(anchor_field) if anchor_field else None
+        anchor_idx = col_to_index(anchor_col) if anchor_col else None
+        order = _columns_by_proximity(n, anchor_idx) if anchor_idx is not None else range(n)
+
         found = None
-        for c, h in enumerate(headers):
-            if c in used or not h:
+        for c in order:
+            if c in used or not headers[c]:
                 continue
+            h = headers[c]
             if not FIELD_MATCHERS[f](h):
                 continue
             if f in PROCESS_FIELDS and not _column_looks_numeric(df, c, data_start):
+                continue
+            if f == "line" and not _column_looks_like_line_no(df, c, data_start):
                 continue
             found = c
             break
@@ -402,17 +502,19 @@ class InstrumentRow:
 MASTER_KEY = "__MASTER__"
 
 
-def scan_master_file(master_file: str, saved_config: dict) -> tuple[SheetMapping, pd.DataFrame]:
+def scan_master_file(master_file: str, saved_config: dict) -> tuple[SheetMapping, pd.DataFrame, list]:
     df = pd.read_excel(master_file, sheet_name=0, header=None)
+    xl = pd.ExcelFile(master_file)
+    merges = get_merged_ranges(master_file, xl.sheet_names[0])
     if MASTER_KEY in saved_config:
         mapping = dict(saved_config[MASTER_KEY])
         source = {f: "saved" for f in mapping}
     else:
-        auto_map = auto_detect_mapping(df)
+        auto_map = auto_detect_mapping(df, merges)
         mapping, source = resolve_mapping(MASTER_DEFAULT, auto_map)
     sm = SheetMapping(file=master_file, sheet="Line List", key=MASTER_KEY,
                        family="MASTER", mapping=mapping, source=source, include=True)
-    return sm, df
+    return sm, df, merges
 
 
 def load_master_lines(df: pd.DataFrame, mapping: dict) -> list[MasterLine]:
@@ -443,11 +545,12 @@ def load_master_lines(df: pd.DataFrame, mapping: dict) -> list[MasterLine]:
 # instrument datasheet scanning / loading
 # =====================================================
 
-def scan_instrument_files(files: list[str], saved_config: dict, progress=None) -> tuple[list[SheetMapping], dict]:
+def scan_instrument_files(files: list[str], saved_config: dict, progress=None) -> tuple[list[SheetMapping], dict, dict]:
     """Opens every sheet of every instrument file, auto-detects (or reuses saved)
-    column mapping, and returns the mapping list plus a df cache for later reuse."""
+    column mapping, and returns the mapping list plus df/merge caches for later reuse."""
     results: list[SheetMapping] = []
     df_cache: dict[tuple[str, str], pd.DataFrame] = {}
+    merge_cache: dict[tuple[str, str], list] = {}
 
     for file in files:
         try:
@@ -459,6 +562,8 @@ def scan_instrument_files(files: list[str], saved_config: dict, progress=None) -
                 progress(f"스캔 중: {Path(file).name} - {sheet}")
             df = xl.parse(sheet, header=None)
             df_cache[(file, sheet)] = df
+            merges = get_merged_ranges(file, sheet)
+            merge_cache[(file, sheet)] = merges
 
             key = normalize_sheet_name(sheet)
             family = detect_family(sheet)
@@ -467,13 +572,13 @@ def scan_instrument_files(files: list[str], saved_config: dict, progress=None) -
                 mapping = dict(saved_config[key])
                 source = {f: "saved" for f in mapping}
             else:
-                auto_map = auto_detect_mapping(df)
+                auto_map = auto_detect_mapping(df, merges)
                 mapping, source = resolve_mapping(DEFAULT_MAP.get(family, {}), auto_map)
 
             include = family is not None or any(s == "auto" for s in source.values())
             results.append(SheetMapping(file=file, sheet=sheet, key=key, family=family,
                                          mapping=mapping, source=source, include=include))
-    return results, df_cache
+    return results, df_cache, merge_cache
 
 
 def load_instrument_rows(sheet_mappings: list[SheetMapping], df_cache: dict) -> list[InstrumentRow]:

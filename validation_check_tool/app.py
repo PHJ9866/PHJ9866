@@ -81,6 +81,36 @@ def card(parent, title=None):
     return outer, frame
 
 
+class Tooltip:
+    """A small borderless popup shown near the cursor, used to preview a mapped
+    column's real header/sample value on hover without opening the edit dialog."""
+
+    def __init__(self, widget):
+        self.widget = widget
+        self.tip: tk.Toplevel | None = None
+
+    def show(self, text: str, x: int, y: int):
+        if self.tip is not None:
+            self.tip.wm_geometry(f"+{x}+{y}")
+            self.label.configure(text=text)
+            return
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)
+        self.tip.wm_geometry(f"+{x}+{y}")
+        try:
+            self.tip.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        self.label = tk.Label(self.tip, text=text, background="#1F2937", foreground="white",
+                               padx=8, pady=5, font=("Segoe UI", 9), justify="left", wraplength=420)
+        self.label.pack()
+
+    def hide(self):
+        if self.tip is not None:
+            self.tip.destroy()
+            self.tip = None
+
+
 class MainApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -94,7 +124,9 @@ class MainApp(tk.Tk):
         self.sheet_mappings: list[engine.SheetMapping] = []
         self.master_sm: engine.SheetMapping | None = None
         self.master_df = None
+        self.master_merges: list = []
         self.df_cache: dict = {}
+        self.merge_cache: dict = {}
         self.mapping_confirmed = False
         self.last_output_path: str | None = None
 
@@ -273,25 +305,30 @@ class MainApp(tk.Tk):
         def work():
             saved_config = engine.load_config(CONFIG_PATH)
             self.log("Line List 스캔 중...")
-            master_sm, master_df = engine.scan_master_file(self.master_file, saved_config)
+            master_sm, master_df, master_merges = engine.scan_master_file(self.master_file, saved_config)
             self.log("Instrument Datasheet 스캔 중 (모든 시트)...")
-            sheet_mappings, df_cache = engine.scan_instrument_files(
+            sheet_mappings, df_cache, merge_cache = engine.scan_instrument_files(
                 self.instrument_files, saved_config, progress=lambda m: self.log(m)
             )
-            self.after(0, lambda: self._on_scan_done(master_sm, master_df, sheet_mappings, df_cache))
+            self.after(0, lambda: self._on_scan_done(
+                master_sm, master_df, master_merges, sheet_mappings, df_cache, merge_cache
+            ))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_scan_done(self, master_sm, master_df, sheet_mappings, df_cache):
+    def _on_scan_done(self, master_sm, master_df, master_merges, sheet_mappings, df_cache, merge_cache):
         self.progress.stop()
         self.progress.configure(mode="determinate", value=0)
         self.set_status("대기 중")
         self.master_sm = master_sm
         self.master_df = master_df
+        self.master_merges = master_merges
         self.sheet_mappings = sheet_mappings
         self.df_cache = df_cache
+        self.merge_cache = merge_cache
         self.log(f"스캔 완료: 시트 {len(sheet_mappings)}개 발견", "ok")
-        MappingDialog(self, master_sm, master_df, sheet_mappings, df_cache, self._on_mapping_confirmed)
+        MappingDialog(self, master_sm, master_df, master_merges, sheet_mappings, df_cache, merge_cache,
+                      self._on_mapping_confirmed)
 
     def _on_mapping_confirmed(self):
         self.mapping_confirmed = True
@@ -388,13 +425,15 @@ class MainApp(tk.Tk):
 class MappingDialog(tk.Toplevel):
     SOURCE_LABEL = {"auto": "자동 인식", "default": "기본값", "saved": "저장됨", "manual": "수동 편집", "missing": "미확인"}
 
-    def __init__(self, parent, master_sm, master_df, sheet_mappings, df_cache, on_confirm):
+    def __init__(self, parent, master_sm, master_df, master_merges, sheet_mappings, df_cache, merge_cache, on_confirm):
         super().__init__(parent)
         self.parent = parent
         self.master_sm = master_sm
         self.master_df = master_df
+        self.master_merges = master_merges
         self.sheet_mappings = sheet_mappings
         self.df_cache = df_cache
+        self.merge_cache = merge_cache
         self.on_confirm = on_confirm
 
         self.title("컬럼 매핑 확인")
@@ -453,6 +492,9 @@ class MappingDialog(tk.Toplevel):
 
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Button-1>", self._on_click)
+        self._tooltip = Tooltip(self.tree)
+        self.tree.bind("<Motion>", self._on_motion)
+        self.tree.bind("<Leave>", lambda e: self._tooltip.hide())
 
         bottom = ttk.Frame(self, padding=(16, 0, 16, 16))
         bottom.pack(fill="x")
@@ -517,6 +559,15 @@ class MappingDialog(tk.Toplevel):
         sm.include = not sm.include
         self.tree.item(row, values=self._row_values(sm))
 
+    def _row_context(self, row):
+        """Returns (sm, df, merges) for a tree row iid ("master" or an index)."""
+        if row == "master":
+            return self.master_sm, self.master_df, self.master_merges
+        sm = self.sheet_mappings[int(row)]
+        df = self.df_cache.get((sm.file, sm.sheet))
+        merges = self.merge_cache.get((sm.file, sm.sheet))
+        return sm, df, merges
+
     def _on_double_click(self, event):
         col = self.tree.identify_column(event.x)
         if col == "#1":
@@ -524,12 +575,34 @@ class MappingDialog(tk.Toplevel):
         row = self.tree.identify_row(event.y)
         if not row or row == "sep":
             return
-        if row == "master":
-            sm, df = self.master_sm, self.master_df
-        else:
-            sm = self.sheet_mappings[int(row)]
-            df = self.df_cache.get((sm.file, sm.sheet))
-        EditRowDialog(self, sm, df, lambda: self._refresh_row(row))
+        sm, df, merges = self._row_context(row)
+        EditRowDialog(self, sm, df, merges, lambda: self._refresh_row(row))
+
+    def _on_motion(self, event):
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            self._tooltip.hide()
+            return
+        row = self.tree.identify_row(event.y)
+        col = self.tree.identify_column(event.x)
+        if not row or row == "sep":
+            self._tooltip.hide()
+            return
+        columns = self.tree["columns"]
+        try:
+            field = columns[int(col.replace("#", "")) - 1]
+        except (ValueError, IndexError):
+            self._tooltip.hide()
+            return
+        if field not in ("tag", "line", *engine.PROCESS_FIELDS):
+            self._tooltip.hide()
+            return
+        sm, df, merges = self._row_context(row)
+        col_letter = sm.mapping.get(field)
+        if not col_letter or df is None:
+            self._tooltip.hide()
+            return
+        text = engine.column_preview(df, col_letter, merges)
+        self._tooltip.show(text, event.x_root + 14, event.y_root + 14)
 
     def _refresh_row(self, row):
         sm = self.master_sm if row == "master" else self.sheet_mappings[int(row)]
@@ -546,10 +619,11 @@ class MappingDialog(tk.Toplevel):
 
 
 class EditRowDialog(tk.Toplevel):
-    def __init__(self, parent, sm: engine.SheetMapping, df, on_saved):
+    def __init__(self, parent, sm: engine.SheetMapping, df, merges, on_saved):
         super().__init__(parent)
         self.sm = sm
         self.df = df
+        self.merges = merges
         self.on_saved = on_saved
         self.entries: dict[str, tk.Entry] = {}
         self.previews: dict[str, ttk.Label] = {}
@@ -636,7 +710,7 @@ class EditRowDialog(tk.Toplevel):
             self.previews[field].configure(text="")
             return
         try:
-            text = engine.column_preview(self.df, col)
+            text = engine.column_preview(self.df, col, self.merges)
         except Exception:
             text = "(잘못된 컬럼)"
         self.previews[field].configure(text=text)
@@ -644,7 +718,7 @@ class EditRowDialog(tk.Toplevel):
     def _auto_redetect(self):
         if self.df is None:
             return
-        auto_map = engine.auto_detect_mapping(self.df)
+        auto_map = engine.auto_detect_mapping(self.df, self.merges)
         default = engine.MASTER_DEFAULT if self.sm.key == engine.MASTER_KEY else engine.DEFAULT_MAP.get(self.sm.family, {})
         mapping, _ = engine.resolve_mapping(default, auto_map)
         for f, entry in self.entries.items():
