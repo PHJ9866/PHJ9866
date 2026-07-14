@@ -496,7 +496,9 @@ def resolve_mapping(default: dict[str, str], auto_map: dict[str, str]) -> tuple[
         elif f in default:
             mapping[f], source[f] = default[f], "default"
         else:
-            mapping[f], source[f] = "A", "missing"
+            # Unrecognized: leave the mapping empty (the GUI shows "매핑 필요")
+            # instead of silently pointing at column A.
+            mapping[f], source[f] = "", "missing"
     return mapping, source
 
 
@@ -513,6 +515,17 @@ class SheetMapping:
     mapping: dict = field(default_factory=dict)
     source: dict = field(default_factory=dict)
     include: bool = True
+    # Snapshot of the mapping/source as originally detected, so a manual edit
+    # that puts a value back to what auto-detection found can drop its
+    # "manual" status again.
+    orig_mapping: dict = field(default_factory=dict)
+    orig_source: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.orig_mapping:
+            self.orig_mapping = dict(self.mapping)
+        if not self.orig_source:
+            self.orig_source = dict(self.source)
 
 
 @dataclass
@@ -564,25 +577,39 @@ def scan_master_file(master_file: str, saved_config: dict) -> tuple[SheetMapping
     return sm, df, merges
 
 
+def _mapping_indexes(mapping: dict, fields: list[str], ncols: int) -> dict[str, int | None]:
+    """Column indexes for each field; None when the field is unmapped (empty)
+    or points outside the sheet, so callers read "" instead of a wrong column."""
+    idx: dict[str, int | None] = {}
+    for f in fields:
+        v = str(mapping.get(f, "") or "").strip()
+        i = col_to_index(v) if v else -1
+        idx[f] = i if 0 <= i < ncols else None
+    return idx
+
+
 def load_master_lines(df: pd.DataFrame, mapping: dict) -> list[MasterLine]:
-    idx = {f: col_to_index(mapping[f]) for f in ["line", *PROCESS_FIELDS]}
+    idx = _mapping_indexes(mapping, ["line", *PROCESS_FIELDS], df.shape[1])
+    if idx["line"] is None:
+        return []
     lines: list[MasterLine] = []
     for r in range(len(df)):
-        try:
-            line_no = clean(df.iat[r, idx["line"]])
-        except IndexError:
-            continue
+        def get(field_name):
+            i = idx[field_name]
+            return clean(df.iat[r, i]) if i is not None else ""
+
+        line_no = get("line")
         if len(line_no.split("-")) < 3:
             continue
         lines.append(
             MasterLine(
                 line_no=line_no,
-                p_op=clean(df.iat[r, idx["p_op"]]),
-                p_des_max=clean(df.iat[r, idx["p_des_max"]]),
-                t_op=clean(df.iat[r, idx["t_op"]]),
-                t_op_max=clean(df.iat[r, idx["t_op_max"]]),
-                t_min=clean(df.iat[r, idx["t_min"]]),
-                t_max=clean(df.iat[r, idx["t_max"]]),
+                p_op=get("p_op"),
+                p_des_max=get("p_des_max"),
+                t_op=get("t_op"),
+                t_op_max=get("t_op_max"),
+                t_min=get("t_min"),
+                t_max=get("t_max"),
             )
         )
     return lines
@@ -640,12 +667,11 @@ def load_instrument_rows(sheet_mappings: list[SheetMapping], df_cache: dict) -> 
         if df is None:
             df = pd.read_excel(sm.file, sheet_name=sm.sheet, header=None)
 
-        idx = {f: col_to_index(sm.mapping[f]) for f in ["tag", "line", *PROCESS_FIELDS]}
-        ncols = df.shape[1]
+        idx = _mapping_indexes(sm.mapping, ["tag", "line", *PROCESS_FIELDS], df.shape[1])
+        if idx["tag"] is None:
+            continue
 
         for r in range(len(df)):
-            if idx["tag"] >= ncols:
-                break
             tag = clean(df.iat[r, idx["tag"]])
             if not tag:
                 continue
@@ -655,7 +681,7 @@ def load_instrument_rows(sheet_mappings: list[SheetMapping], df_cache: dict) -> 
 
             def get(field_name):
                 i = idx[field_name]
-                return clean(df.iat[r, i]) if i < ncols else ""
+                return clean(df.iat[r, i]) if i is not None else ""
 
             rows.append(
                 InstrumentRow(

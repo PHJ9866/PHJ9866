@@ -8,6 +8,7 @@ review/fix anything wrong in one screen, then generate the highlighted report.
 from __future__ import annotations
 
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -37,8 +38,6 @@ COLORS = {
     "row_ok": "#E6F4EA",
     "row_warn": "#FFF6E0",
     "row_bad": "#FBE7E7",
-    "row_manual": "#DBEAFE",
-    "manual_text": "#1D4ED8",
 }
 
 FIELDS_FOR_INSTRUMENT = ["tag", "line", *engine.PROCESS_FIELDS]
@@ -459,12 +458,13 @@ class MappingDialog(tk.Toplevel):
         legend.pack(anchor="w", pady=(6, 0))
         for text, color in [("자동/저장됨 인식 완료", COLORS["row_ok"]),
                              ("기본값 사용(확인 필요)", COLORS["row_warn"]),
-                             ("컬럼 미확인", COLORS["row_bad"]),
-                             ("수동 편집 포함 (* 표시)", COLORS["row_manual"])]:
+                             ("컬럼 미확인", COLORS["row_bad"])]:
             sw = tk.Label(legend, text="  ", bg=color, relief="solid", bd=1)
             sw.pack(side="left", padx=(0, 4))
             ttk.Label(legend, text=text, background=COLORS["bg"], style="Status.TLabel").pack(
                 side="left", padx=(0, 14))
+        ttk.Label(legend, text="* = 수동 편집한 컬럼", background=COLORS["bg"],
+                  style="Status.TLabel").pack(side="left")
 
         process_headers = {
             "p_op": "Op.Press", "p_des_max": "Max Des.Press",
@@ -490,7 +490,6 @@ class MappingDialog(tk.Toplevel):
         self.tree.tag_configure("ok", background=COLORS["row_ok"])
         self.tree.tag_configure("warn", background=COLORS["row_warn"])
         self.tree.tag_configure("bad", background=COLORS["row_bad"])
-        self.tree.tag_configure("manual", background=COLORS["row_manual"], foreground=COLORS["manual_text"])
         self.tree.tag_configure("master", font=("Segoe UI", 9, "bold"))
         self.tree.tag_configure("sep", background=COLORS["bg"])
 
@@ -504,14 +503,24 @@ class MappingDialog(tk.Toplevel):
         bottom.pack(fill="x")
         ttk.Button(bottom, text="전체 포함", command=lambda: self._set_all_include(True)).pack(side="left")
         ttk.Button(bottom, text="전체 제외", command=lambda: self._set_all_include(False)).pack(side="left", padx=(6, 0))
+
+        ttk.Label(bottom, text="시트 필터:", background=COLORS["bg"]).pack(side="left", padx=(18, 4))
+        self.filter_var = tk.StringVar()
+        filter_entry = tk.Entry(bottom, textvariable=self.filter_var, width=14, font=("Segoe UI", 9))
+        filter_entry.pack(side="left")
+        filter_entry.bind("<Return>", lambda e: self._apply_filter())
+        ttk.Button(bottom, text="일치만 포함", command=self._apply_filter).pack(side="left", padx=(4, 0))
+
         ttk.Button(bottom, text="취소", command=self.destroy).pack(side="right")
         ttk.Button(bottom, text="확인 (매핑 저장)", style="Accent.TButton",
                    command=self._confirm).pack(side="right", padx=(0, 8))
 
     def _cell_text(self, sm: engine.SheetMapping, f: str):
         v = sm.mapping.get(f, "")
+        if not v:
+            return "매핑 필요"
         # Mark manually-edited columns so they stand out from auto-detected ones.
-        return f"{v} *" if v and sm.source.get(f) == "manual" else v
+        return f"{v} *" if sm.source.get(f) == "manual" else v
 
     def _row_values(self, sm: engine.SheetMapping):
         is_master = sm.key == engine.MASTER_KEY
@@ -539,8 +548,6 @@ class MappingDialog(tk.Toplevel):
         sources = set(sm.source.values())
         if "missing" in sources:
             return "bad"
-        if "manual" in sources:
-            return "manual"
         if "default" in sources:
             return "warn"
         return "ok"
@@ -633,6 +640,16 @@ class MappingDialog(tk.Toplevel):
             sm.include = value
             self.tree.item(str(i), values=self._row_values(sm))
 
+    def _apply_filter(self):
+        """Includes only the sheets whose name contains the filter text
+        (case-insensitive); every other sheet is excluded."""
+        text = self.filter_var.get().strip().upper()
+        if not text:
+            return
+        for i, sm in enumerate(self.sheet_mappings):
+            sm.include = text in sm.sheet.upper()
+            self.tree.item(str(i), values=self._row_values(sm))
+
     def _confirm(self):
         self.destroy()
         self.on_confirm()
@@ -663,7 +680,8 @@ class EditRowDialog(tk.Toplevel):
         header.pack(fill="x")
         ttk.Label(header, text=f"{Path(self.sm.file).name} / {self.sm.sheet}",
                   font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        ttk.Label(header, text="엑셀 컬럼 문자(A, B, AC ...)를 입력하면 오른쪽에 실제 헤더/샘플 값이 나와요.",
+        ttk.Label(header, text="엑셀 컬럼 문자(A, B, AC ...)를 입력하면 오른쪽에 실제 헤더/샘플 값이 나와요. "
+                              "해당 항목이 없는 시트는 비워두면 됩니다.",
                   style="Status.TLabel").pack(anchor="w")
 
         # Buttons are packed to the bottom first so they always stay visible and
@@ -750,15 +768,24 @@ class EditRowDialog(tk.Toplevel):
         values = {}
         for f, entry in self.entries.items():
             val = entry.get().strip().upper()
-            if not val:
-                messagebox.showwarning("입력 필요", f"{engine.FIELD_LABELS[f]} 컬럼을 입력하세요.")
+            # Empty = intentionally unmapped (the sheet may simply not have this
+            # field); otherwise it must be a plain Excel column letter.
+            if val and not re.fullmatch(r"[A-Z]{1,3}", val):
+                messagebox.showwarning(
+                    "잘못된 입력",
+                    f"{engine.FIELD_LABELS[f]}: 컬럼은 A~Z 문자로만 입력하세요.\n(비워두면 매핑하지 않습니다.)")
                 return
             values[f] = val
         for f, val in values.items():
-            # Only fields the user actually changed count as manual edits -
-            # re-saving an untouched auto-detected value keeps its status.
-            if val != self.sm.mapping.get(f):
-                self.sm.mapping[f] = val
+            # Only fields the user actually changed count as manual edits, and
+            # putting a value back to what was originally detected restores its
+            # original status instead of staying marked as manual.
+            if val == self.sm.mapping.get(f, ""):
+                continue
+            self.sm.mapping[f] = val
+            if val == self.sm.orig_mapping.get(f, ""):
+                self.sm.source[f] = self.sm.orig_source.get(f, "manual")
+            else:
                 self.sm.source[f] = "manual"
         self.destroy()
         self.on_saved()
