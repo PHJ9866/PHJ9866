@@ -39,8 +39,8 @@ COLORS = {
     "row_bad": "#FBE7E7",
 }
 
-FIELDS_FOR_INSTRUMENT = ["tag", "line", "p_op", "p_des", "t_op", "t_min", "t_max"]
-FIELDS_FOR_MASTER = ["line", "p_op", "p_des", "t_op", "t_min", "t_max"]
+FIELDS_FOR_INSTRUMENT = ["tag", "line", *engine.PROCESS_FIELDS]
+FIELDS_FOR_MASTER = ["line", *engine.PROCESS_FIELDS]
 
 
 def setup_style(root: tk.Tk) -> None:
@@ -398,7 +398,8 @@ class MappingDialog(tk.Toplevel):
         self.on_confirm = on_confirm
 
         self.title("컬럼 매핑 확인")
-        self.geometry("1180x560")
+        self.geometry("1260x580")
+        self.minsize(1000, 480)
         self.configure(bg=COLORS["bg"])
         self.transient(parent)
         self.grab_set()
@@ -423,16 +424,21 @@ class MappingDialog(tk.Toplevel):
             ttk.Label(legend, text=text, background=COLORS["bg"], style="Status.TLabel").pack(
                 side="left", padx=(0, 14))
 
-        columns = ["include", "file", "sheet", "family", "tag", "line", "p_op", "p_des", "t_op", "t_min", "t_max", "status"]
-        headers = ["포함", "파일", "시트", "구분", "Tag", "Line No", "Op.Press", "Des.Press",
-                   "Op.Temp", "Min Des.Temp", "Max Des.Temp", "인식 상태"]
+        process_headers = {
+            "p_op": "Op.Press", "p_des": "Des.Press", "t_op": "Op.Temp",
+            "t_op_max": "Max Op.Temp", "t_min": "Min Des.Temp", "t_max": "Max Des.Temp",
+        }
+        columns = ["include", "file", "sheet", "family", "tag", "line", *engine.PROCESS_FIELDS, "status"]
+        headers = ["포함", "파일", "시트", "구분", "Tag", "Line No",
+                   *[process_headers[f] for f in engine.PROCESS_FIELDS], "인식 상태"]
 
         tree_frame = ttk.Frame(self, padding=16)
         tree_frame.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="browse")
+        narrow = {"include", "tag", "line", *engine.PROCESS_FIELDS}
         for col, head in zip(columns, headers):
             self.tree.heading(col, text=head)
-            width = 70 if col in ("include", "tag", "line", "p_op", "p_des", "t_op", "t_min", "t_max") else 150
+            width = 70 if col in narrow else 150
             self.tree.column(col, width=width, anchor="center" if col != "file" and col != "sheet" else "w")
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
@@ -466,11 +472,7 @@ class MappingDialog(tk.Toplevel):
             sm.family or "미분류",
             tag,
             sm.mapping.get("line", ""),
-            sm.mapping.get("p_op", ""),
-            sm.mapping.get("p_des", ""),
-            sm.mapping.get("t_op", ""),
-            sm.mapping.get("t_min", ""),
-            sm.mapping.get("t_max", ""),
+            *[sm.mapping.get(f, "") for f in engine.PROCESS_FIELDS],
             self._status_text(sm),
         )
 
@@ -548,7 +550,8 @@ class EditRowDialog(tk.Toplevel):
         self.previews: dict[str, ttk.Label] = {}
 
         self.title(f"매핑 편집 - {sm.sheet}")
-        self.geometry("560x360")
+        self.geometry("640x520")
+        self.minsize(560, 320)
         self.configure(bg=COLORS["bg"])
         self.transient(parent)
         self.grab_set()
@@ -557,39 +560,70 @@ class EditRowDialog(tk.Toplevel):
         self._build(fields)
 
     def _build(self, fields):
-        wrap = ttk.Frame(self, padding=16)
-        wrap.pack(fill="both", expand=True)
-
-        header = ttk.Frame(wrap)
-        header.pack(fill="x", pady=(0, 10))
+        header = ttk.Frame(self, padding=(16, 16, 16, 0))
+        header.pack(fill="x")
         ttk.Label(header, text=f"{Path(self.sm.file).name} / {self.sm.sheet}",
                   font=("Segoe UI", 10, "bold")).pack(anchor="w")
         ttk.Label(header, text="엑셀 컬럼 문자(A, B, AC ...)를 입력하면 오른쪽에 실제 헤더/샘플 값이 나와요.",
                   style="Status.TLabel").pack(anchor="w")
 
-        grid = ttk.Frame(wrap)
-        grid.pack(fill="both", expand=True)
+        # Buttons are packed to the bottom first so they always stay visible and
+        # reachable, no matter how tall the (scrollable) field list grows.
+        btns = ttk.Frame(self, padding=(16, 8, 16, 16))
+        btns.pack(side="bottom", fill="x")
+        ttk.Button(btns, text="자동 재탐지", command=self._auto_redetect).pack(side="left")
+        ttk.Button(btns, text="취소", command=self.destroy).pack(side="right")
+        ttk.Button(btns, text="저장", style="Accent.TButton", command=self._save).pack(side="right", padx=(0, 8))
+
+        body = ttk.Frame(self, padding=(16, 12, 16, 0))
+        body.pack(side="top", fill="both", expand=True)
+        canvas = tk.Canvas(body, bg=COLORS["bg"], highlightthickness=0)
+        vsb = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="left", fill="y")
+
+        grid = ttk.Frame(canvas)
+        grid_window = canvas.create_window((0, 0), window=grid, anchor="nw")
+        grid.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(grid_window, width=e.width))
+
+        def on_mousewheel(event):
+            if event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+            else:
+                canvas.yview_scroll(-1 * (event.delta // 120 or (1 if event.delta > 0 else -1)), "units")
+
+        def bind_wheel(_e=None):
+            canvas.bind_all("<MouseWheel>", on_mousewheel)
+            canvas.bind_all("<Button-4>", on_mousewheel)
+            canvas.bind_all("<Button-5>", on_mousewheel)
+
+        def unbind_wheel(_e=None):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        self.bind("<Enter>", bind_wheel)
+        self.bind("<Leave>", unbind_wheel)
+        self.bind("<Destroy>", unbind_wheel)
 
         for r, f in enumerate(fields):
-            ttk.Label(grid, text=engine.FIELD_LABELS[f], width=20).grid(row=r, column=0, sticky="w", pady=4)
+            ttk.Label(grid, text=engine.FIELD_LABELS[f], width=22).grid(row=r, column=0, sticky="w", pady=4)
             entry = tk.Entry(grid, width=6, justify="center", font=("Consolas", 10))
             entry.insert(0, self.sm.mapping.get(f, ""))
             entry.grid(row=r, column=1, padx=(6, 10), pady=4)
             entry.bind("<KeyRelease>", lambda e, field=f: self._update_preview(field))
             self.entries[f] = entry
 
-            preview = ttk.Label(grid, text="", style="Status.TLabel", wraplength=320, justify="left")
+            preview = ttk.Label(grid, text="", style="Status.TLabel", wraplength=380, justify="left")
             preview.grid(row=r, column=2, sticky="w", pady=4)
             self.previews[f] = preview
             self._update_preview(f)
 
         grid.columnconfigure(2, weight=1)
-
-        btns = ttk.Frame(wrap)
-        btns.pack(fill="x", pady=(14, 0))
-        ttk.Button(btns, text="자동 재탐지", command=self._auto_redetect).pack(side="left")
-        ttk.Button(btns, text="취소", command=self.destroy).pack(side="right")
-        ttk.Button(btns, text="저장", style="Accent.TButton", command=self._save).pack(side="right", padx=(0, 8))
 
     def _update_preview(self, field):
         col = self.entries[field].get().strip().upper()

@@ -17,7 +17,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-PROCESS_FIELDS = ["p_op", "p_des", "t_op", "t_min", "t_max"]
+PROCESS_FIELDS = ["p_op", "p_des", "t_op", "t_op_max", "t_min", "t_max"]
 
 FIELD_LABELS = {
     "tag": "Tag No",
@@ -25,20 +25,35 @@ FIELD_LABELS = {
     "p_op": "Operating Pressure",
     "p_des": "Design Pressure",
     "t_op": "Operating Temperature",
+    "t_op_max": "Max Operating Temperature",
     "t_min": "Min Design Temperature",
     "t_max": "Max Design Temperature",
 }
 
-FIELD_ORDER = ["tag", "line", "p_des", "p_op", "t_min", "t_max", "t_op"]
+FIELD_ORDER = ["tag", "line", "p_des", "p_op", "t_max", "t_op_max", "t_min", "t_op"]
 
-FIELD_PATTERNS = {
-    "tag": [r"TAG\s*(NO\.?|NUMBER)?\b", r"INSTRUMENT\s*(TAG|NO)"],
-    "line": [r"LINE\s*(NO\.?|NUMBER)?\b", r"P\s*&\s*ID\s*LINE"],
-    "p_des": [r"DESIGN\s*PRESS"],
-    "p_op": [r"OPER\w*\.?\s*PRESS", r"NORMAL\s*PRESS"],
-    "t_min": [r"MIN\w*\.?\s*(DESIGN\s*)?TEMP"],
-    "t_max": [r"MAX\w*\.?\s*(DESIGN\s*)?TEMP"],
-    "t_op": [r"OPER\w*\.?\s*TEMP"],
+
+def _has(text: str, *keywords: str) -> bool:
+    return all(re.search(k, text) for k in keywords)
+
+
+def _lacks(text: str, *keywords: str) -> bool:
+    return not any(re.search(k, text) for k in keywords)
+
+
+# Header cells for grouped columns (e.g. a merged "Temperature" label above
+# separate "Operating"/"Design Minimum"/"Design Maximum" sub-columns) can put the
+# keywords in either order once concatenated top-to-bottom, so matching is done
+# by presence/absence of each keyword rather than a fixed left-to-right sequence.
+FIELD_MATCHERS = {
+    "tag": lambda t: bool(re.search(r"TAG", t)),
+    "line": lambda t: bool(re.search(r"LINE", t)) or bool(re.search(r"P\s*&\s*ID\s*LINE", t)),
+    "p_des": lambda t: _has(t, r"PRESS", r"DESIGN"),
+    "p_op": lambda t: _has(t, r"PRESS") and _lacks(t, r"DESIGN"),
+    "t_max": lambda t: _has(t, r"TEMP", r"MAX", r"DESIGN"),
+    "t_op_max": lambda t: _has(t, r"TEMP", r"MAX") and _lacks(t, r"DESIGN"),
+    "t_min": lambda t: _has(t, r"TEMP", r"MIN"),
+    "t_op": lambda t: _has(t, r"TEMP", r"OPER") and _lacks(t, r"MAX", r"MIN"),
 }
 
 TAG_TYPE_KEYWORDS = ["FT", "FZT", "PT", "PG", "FV", "XV", "PSV"]
@@ -157,6 +172,7 @@ COMPARATORS = {
     "p_op": compare_pressure_op,
     "p_des": compare_numeric,
     "t_op": compare_temp_op,
+    "t_op_max": compare_numeric,
     "t_min": compare_numeric,
     "t_max": compare_numeric,
 }
@@ -164,34 +180,68 @@ COMPARATORS = {
 # t_op is intentionally excluded from the overall PASS/FAIL verdict: it is very
 # often "AMB" on the line list against a real number on the datasheet, which is
 # an expected, not an erroneous, difference.
-FIELDS_IN_VERDICT = ["p_op", "p_des", "t_min", "t_max"]
+FIELDS_IN_VERDICT = ["p_op", "p_des", "t_op_max", "t_min", "t_max"]
 
 
 # =====================================================
 # auto column mapping
 # =====================================================
 
-def build_header_text(df: pd.DataFrame, header_rows: int = 20) -> list[str]:
+def _is_data_row(row) -> bool:
+    non_null = int(row.notna().sum())
+    if non_null < 3:
+        return False
+    numeric_like = sum(1 for v in row if pd.notna(v) and extract_numeric(v) is not None)
+    return numeric_like / non_null >= 0.6
+
+
+def detect_header_row_count(df: pd.DataFrame, max_rows: int = 40, confirm_rows: int = 3) -> int:
+    """Finds where the header block ends and real data begins, so header text
+    scanning doesn't scoop up actual data values (tag numbers, pressures, ...)
+    as if they were column headers. A single numeric-looking row isn't enough -
+    a lone row of column-index numbers (e.g. "1 2 3 ...") above the real headers
+    would look like data too - so `confirm_rows` consecutive rows must all look
+    like data before that point is treated as where the header block ends."""
+    limit = min(max_rows, len(df))
+    for r in range(limit):
+        window = df.iloc[r: min(r + confirm_rows, len(df))]
+        if len(window) > 0 and all(_is_data_row(window.iloc[i]) for i in range(len(window))):
+            return r
+    return limit
+
+
+def build_header_text(df: pd.DataFrame, header_rows: int | None = None) -> list[str]:
+    if header_rows is None:
+        header_rows = detect_header_row_count(df)
     n = min(header_rows, len(df))
+    if n == 0:
+        return ["" for _ in range(df.shape[1])]
+
+    # Forward-fill each header row left-to-right so a merged group label (e.g.
+    # "Temperature" spanning several columns, stored only in the leftmost cell)
+    # propagates onto every column it visually covers, instead of only the first.
+    filled = df.iloc[:n].apply(lambda row: row.ffill(), axis=1)
+
     headers = []
     for c in range(df.shape[1]):
         parts = []
         for r in range(n):
-            v = df.iat[r, c]
+            v = filled.iat[r, c]
             if pd.notna(v):
                 s = str(v).strip()
-                if s:
+                if s and s not in parts:
                     parts.append(s)
         headers.append(" ".join(parts).upper())
     return headers
 
 
-def column_preview(df: pd.DataFrame, col_letter: str, header_rows: int = 20) -> str:
+def column_preview(df: pd.DataFrame, col_letter: str, max_len: int = 110) -> str:
     """Human-readable preview of a column: its header text plus one sample value,
     used in the GUI so the user can sanity-check a mapping without opening Excel."""
     idx = col_to_index(col_letter)
     if idx < 0 or idx >= df.shape[1]:
         return "(범위 밖)"
+    header_rows = detect_header_row_count(df)
     header = " / ".join(
         str(df.iat[r, idx]).strip()
         for r in range(min(header_rows, len(df)))
@@ -204,7 +254,10 @@ def column_preview(df: pd.DataFrame, col_letter: str, header_rows: int = 20) -> 
             sample = str(v).strip()
             break
     header = header or "(헤더 없음)"
-    return f"{header}   [예: {sample}]" if sample else header
+    text = f"{header}   [예: {sample}]" if sample else header
+    if len(text) > max_len:
+        text = text[:max_len] + "..."
+    return text
 
 
 def auto_detect_mapping(df: pd.DataFrame) -> dict[str, str]:
@@ -216,7 +269,7 @@ def auto_detect_mapping(df: pd.DataFrame) -> dict[str, str]:
         for c, h in enumerate(headers):
             if c in used or not h:
                 continue
-            if any(re.search(p, h) for p in FIELD_PATTERNS[f]):
+            if FIELD_MATCHERS[f](h):
                 found = c
                 break
         if found is not None:
@@ -258,6 +311,7 @@ class MasterLine:
     p_op: str
     p_des: str
     t_op: str
+    t_op_max: str
     t_min: str
     t_max: str
 
@@ -270,6 +324,7 @@ class InstrumentRow:
     p_op: str
     p_des: str
     t_op: str
+    t_op_max: str
     t_min: str
     t_max: str
     source_file: str
@@ -312,6 +367,7 @@ def load_master_lines(df: pd.DataFrame, mapping: dict) -> list[MasterLine]:
                 p_op=clean(df.iat[r, idx["p_op"]]),
                 p_des=clean(df.iat[r, idx["p_des"]]),
                 t_op=clean(df.iat[r, idx["t_op"]]),
+                t_op_max=clean(df.iat[r, idx["t_op_max"]]),
                 t_min=clean(df.iat[r, idx["t_min"]]),
                 t_max=clean(df.iat[r, idx["t_max"]]),
             )
@@ -390,6 +446,7 @@ def load_instrument_rows(sheet_mappings: list[SheetMapping], df_cache: dict) -> 
                     p_op=get("p_op"),
                     p_des=get("p_des"),
                     t_op=get("t_op"),
+                    t_op_max=get("t_op_max"),
                     t_min=get("t_min"),
                     t_max=get("t_max"),
                     source_file=Path(sm.file).name,
@@ -429,13 +486,26 @@ YELLOW = PatternFill("solid", fgColor="FFF2CC")
 HEADER_FILL = PatternFill("solid", fgColor="305496")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
 
-REPORT_HEADERS = [
-    "Line No", "Tag No", "Type",
-    "P_Oper", "P_Design",
-    "T_Oper", "T_Min_Design", "T_Max_Design",
-    "Source File", "Source Sheet",
-    "Result",
+PROCESS_FIELD_COLUMNS = [
+    ("p_op", "P_Oper"),
+    ("p_des", "P_Design"),
+    ("t_op", "T_Oper"),
+    ("t_op_max", "T_Oper_Max"),
+    ("t_min", "T_Min_Design"),
+    ("t_max", "T_Max_Design"),
 ]
+
+REPORT_HEADERS = (
+    ["Line No", "Tag No", "Type"]
+    + [h for _, h in PROCESS_FIELD_COLUMNS]
+    + ["Source File", "Source Sheet", "Result"]
+)
+
+PROCESS_START_COL = 4
+FIELD_COL = {f: PROCESS_START_COL + i for i, (f, _) in enumerate(PROCESS_FIELD_COLUMNS)}
+SOURCE_FILE_COL = PROCESS_START_COL + len(PROCESS_FIELD_COLUMNS)
+SOURCE_SHEET_COL = SOURCE_FILE_COL + 1
+RESULT_COL = SOURCE_SHEET_COL + 1
 
 
 @dataclass
@@ -472,11 +542,8 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
         ws.cell(excel_row, 1, line.line_no)
         ws.cell(excel_row, 2, "MASTER")
         ws.cell(excel_row, 3, "LINE")
-        ws.cell(excel_row, 4, line.p_op)
-        ws.cell(excel_row, 5, line.p_des)
-        ws.cell(excel_row, 6, line.t_op)
-        ws.cell(excel_row, 7, line.t_min)
-        ws.cell(excel_row, 8, line.t_max)
+        for f in PROCESS_FIELDS:
+            ws.cell(excel_row, FIELD_COL[f], getattr(line, f))
         for c in range(1, n_cols + 1):
             ws.cell(excel_row, c).fill = GRAY
         excel_row += 1
@@ -498,18 +565,16 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
 
             ws.cell(excel_row, 2, inst.tag)
             ws.cell(excel_row, 3, inst.inst_type)
-            ws.cell(excel_row, 4, inst.p_op)
-            ws.cell(excel_row, 5, inst.p_des)
-            ws.cell(excel_row, 6, inst.t_op)
-            ws.cell(excel_row, 7, inst.t_min)
-            ws.cell(excel_row, 8, inst.t_max)
-            ws.cell(excel_row, 9, inst.source_file)
-            ws.cell(excel_row, 10, inst.source_sheet)
-            ws.cell(excel_row, 11, final)
+            for f in PROCESS_FIELDS:
+                ws.cell(excel_row, FIELD_COL[f], getattr(inst, f))
+            ws.cell(excel_row, SOURCE_FILE_COL, inst.source_file)
+            ws.cell(excel_row, SOURCE_SHEET_COL, inst.source_sheet)
+            ws.cell(excel_row, RESULT_COL, final)
 
-            ws.cell(excel_row, 11).fill = GREEN if final == "PASS" else RED
-            for col, field_name in zip([4, 5, 6, 7, 8], PROCESS_FIELDS):
+            ws.cell(excel_row, RESULT_COL).fill = GREEN if final == "PASS" else RED
+            for field_name in PROCESS_FIELDS:
                 r = results[field_name]
+                col = FIELD_COL[field_name]
                 if r == "PASS":
                     ws.cell(excel_row, col).fill = GREEN
                 elif r == "FAIL":
