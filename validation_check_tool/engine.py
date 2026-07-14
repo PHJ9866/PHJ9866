@@ -42,7 +42,7 @@ def _lacks(text: str, *keywords: str) -> bool:
 
 
 def _match_p_des_max(t: str) -> bool:
-    if not _has(t, r"PRESS", r"DESIGN"):
+    if not _has(t, r"PRESS", r"DESIGN") or _has(t, r"DIFFERENTIAL"):
         return False
     if _has(t, r"MAX"):
         return True
@@ -55,9 +55,10 @@ def _match_p_des_max(t: str) -> bool:
 def _match_p_op(t: str) -> bool:
     if not _has(t, r"PRESS") or _has(t, r"DESIGN"):
         return False
-    # Hydrotest/strength-test pressure columns also read "... Pressure" but are
-    # never the operating pressure.
-    if not _lacks(t, r"TEST", r"STRENGTH", r"HYDRO"):
+    # Hydrotest/strength-test pressure and Differential Pressure (a DP
+    # transmitter's own span, not the line's operating pressure) columns also
+    # read "... Pressure" but are never the operating pressure.
+    if not _lacks(t, r"TEST", r"STRENGTH", r"HYDRO", r"DIFFERENTIAL"):
         return False
     if _has(t, r"NOR(MAL)?"):
         return True
@@ -784,11 +785,25 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
 
         matches = [inst for inst in instrument_rows if line.line_no in inst.line_no]
 
+        # Evaluate every match's PASS/FAIL before writing the MASTER row, so its
+        # Result cell can roll up "FAIL" whenever any related Instrument fails -
+        # otherwise the MASTER row's blank Result cell drops out of an Excel
+        # filter set to "FAIL", hiding the Line context above the failing rows.
+        match_results = []
+        for inst in matches:
+            results = {f: COMPARATORS[f](getattr(line, f), getattr(inst, f)) for f in PROCESS_FIELDS}
+            final = "FAIL" if any(results[f] == "FAIL" for f in FIELDS_IN_VERDICT) else "PASS"
+            match_results.append((inst, results, final))
+        line_result = "FAIL" if any(final == "FAIL" for _, _, final in match_results) else (
+            "PASS" if match_results else "")
+
         ws.cell(excel_row, 1, line.line_no)
         ws.cell(excel_row, 2, "MASTER")
         ws.cell(excel_row, 3, "LINE")
         for f in PROCESS_FIELDS:
             ws.cell(excel_row, FIELD_COL[f], getattr(line, f))
+        if line_result:
+            ws.cell(excel_row, RESULT_COL, line_result)
         for c in range(1, n_cols + 1):
             if c == REMARK_COL:
                 continue
@@ -805,10 +820,8 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
             stats.missing_lines += 1
             continue
 
-        for inst in matches:
+        for inst, results, final in match_results:
             stats.matched += 1
-            results = {f: COMPARATORS[f](getattr(line, f), getattr(inst, f)) for f in PROCESS_FIELDS}
-            final = "FAIL" if any(results[f] == "FAIL" for f in FIELDS_IN_VERDICT) else "PASS"
             if final == "FAIL":
                 stats.fail_count += 1
 

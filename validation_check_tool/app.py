@@ -466,6 +466,17 @@ class MappingDialog(tk.Toplevel):
         ttk.Label(legend, text="* = 수동 편집한 컬럼", background=COLORS["bg"],
                   style="Status.TLabel").pack(side="left")
 
+        filter_row = ttk.Frame(top)
+        filter_row.pack(anchor="w", pady=(10, 0), fill="x")
+        ttk.Label(filter_row, text="시트 이름 필터:", background=COLORS["bg"]).pack(side="left", padx=(0, 4))
+        self.filter_var = tk.StringVar()
+        filter_entry = tk.Entry(filter_row, textvariable=self.filter_var, width=18, font=("Segoe UI", 9))
+        filter_entry.pack(side="left")
+        filter_entry.bind("<KeyRelease>", lambda e: self._refresh_tree())
+        ttk.Label(filter_row, text="(입력하는 대로 표에서 일치하는 시트만 보여줘요 - 엑셀 필터처럼)",
+                  background=COLORS["bg"], style="Status.TLabel").pack(side="left", padx=(6, 0))
+        ttk.Button(filter_row, text="지우기", command=self._clear_filter).pack(side="left", padx=(8, 0))
+
         process_headers = {
             "p_op": "Op.Press", "p_des_max": "Max Des.Press",
             "t_op": "Op.Temp", "t_op_max": "Max Op.Temp", "t_min": "Min Des.Temp", "t_max": "Max Des.Temp",
@@ -503,13 +514,8 @@ class MappingDialog(tk.Toplevel):
         bottom.pack(fill="x")
         ttk.Button(bottom, text="전체 포함", command=lambda: self._set_all_include(True)).pack(side="left")
         ttk.Button(bottom, text="전체 제외", command=lambda: self._set_all_include(False)).pack(side="left", padx=(6, 0))
-
-        ttk.Label(bottom, text="시트 필터:", background=COLORS["bg"]).pack(side="left", padx=(18, 4))
-        self.filter_var = tk.StringVar()
-        filter_entry = tk.Entry(bottom, textvariable=self.filter_var, width=14, font=("Segoe UI", 9))
-        filter_entry.pack(side="left")
-        filter_entry.bind("<Return>", lambda e: self._apply_filter())
-        ttk.Button(bottom, text="일치만 포함", command=self._apply_filter).pack(side="left", padx=(4, 0))
+        ttk.Button(bottom, text="필터에 일치하는 시트만 포함",
+                   command=self._include_matching_filter).pack(side="left", padx=(6, 0))
 
         ttk.Button(bottom, text="취소", command=self.destroy).pack(side="right")
         ttk.Button(bottom, text="확인 (매핑 저장)", style="Accent.TButton",
@@ -560,8 +566,18 @@ class MappingDialog(tk.Toplevel):
         # from the Instrument sheet rows below.
         blank = ("",) * len(self.tree["columns"])
         self.tree.insert("", "end", iid="sep", values=blank, tags=("sep",))
+        # The sheet-name filter only controls which rows are shown here - it
+        # doesn't touch sm.include, so typing a filter is safe to explore with
+        # (e.g. to hover-check a subset) before deciding what to include.
+        filter_text = self.filter_var.get().strip().upper() if hasattr(self, "filter_var") else ""
         for i, sm in enumerate(self.sheet_mappings):
+            if filter_text and filter_text not in sm.sheet.upper():
+                continue
             self.tree.insert("", "end", iid=str(i), values=self._row_values(sm), tags=(self._row_tag(sm),))
+
+    def _clear_filter(self):
+        self.filter_var.set("")
+        self._refresh_tree()
 
     def _on_click(self, event):
         region = self.tree.identify_region(event.x, event.y)
@@ -575,7 +591,7 @@ class MappingDialog(tk.Toplevel):
             return
         sm = self.sheet_mappings[int(row)]
         sm.include = not sm.include
-        self.tree.item(row, values=self._row_values(sm))
+        self._refresh_row(row)
 
     def _row_context(self, row):
         """Returns (sm, df, merges) for a tree row iid ("master" or an index)."""
@@ -632,23 +648,26 @@ class MappingDialog(tk.Toplevel):
         self._tooltip.show(text, event.x_root + 14, event.y_root + 14)
 
     def _refresh_row(self, row):
+        if not self.tree.exists(row):
+            return
         sm = self.master_sm if row == "master" else self.sheet_mappings[int(row)]
         self.tree.item(row, values=self._row_values(sm), tags=(self._row_tag(sm), "master") if row == "master" else (self._row_tag(sm),))
 
     def _set_all_include(self, value: bool):
         for i, sm in enumerate(self.sheet_mappings):
             sm.include = value
-            self.tree.item(str(i), values=self._row_values(sm))
+            self._refresh_row(str(i))
 
-    def _apply_filter(self):
+    def _include_matching_filter(self):
         """Includes only the sheets whose name contains the filter text
         (case-insensitive); every other sheet is excluded."""
         text = self.filter_var.get().strip().upper()
         if not text:
+            messagebox.showinfo("필터 필요", "먼저 위쪽 시트 이름 필터에 텍스트를 입력하세요.")
             return
         for i, sm in enumerate(self.sheet_mappings):
             sm.include = text in sm.sheet.upper()
-            self.tree.item(str(i), values=self._row_values(sm))
+            self._refresh_row(str(i))
 
     def _confirm(self):
         self.destroy()
