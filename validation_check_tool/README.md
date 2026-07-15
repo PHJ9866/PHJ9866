@@ -37,8 +37,12 @@ python app.py
    비워두면 됩니다). 상단의 **시트 이름 필터**에 텍스트(예: PE)를 입력하면 엑셀 필터처럼
    일치하는 시트만 화면에 보여줘서 (실제 포함 여부는 바꾸지 않고) 마우스 오버로 미리 확인해볼
    수 있고, 필요하면 "필터에 일치하는 시트만 포함" 버튼으로 그대로 포함 여부에 반영할 수
-   있습니다. 필요 없는 시트는 "포함" 칸을 클릭해서 개별적으로 제외할 수도 있습니다.
-   확인한 매핑은 `config.json`에 저장되어 다음 실행부터는 같은 시트를 다시 스캔할 필요가 없습니다.
+   있습니다. 필요 없는 시트는 "포함" 칸을 클릭해서 개별적으로 제외할 수도 있습니다. 한 시트를
+   수동으로 고치면 " - PE"/" - HE"/" - BU"처럼 같은 종류의 다른 시트에도 즉시 함께 반영됩니다
+   (컬럼 레이아웃은 같다고 보기 때문 - 포함 여부는 시트마다 따로 유지됩니다).
+   확인한 매핑과 포함/제외 여부는 `config.json`에 저장되어, 다음 실행 때 Instrument 파일
+   이름이 바뀌어도(예: 파일명 끝 날짜가 매일 달라지는 경우) 시트 이름이 같으면 그대로
+   적용되고 다시 물어보지 않습니다.
 4. **④ Report 생성**: 저장 경로를 지정하면 Validation Report(.xlsx)가 생성됩니다.
    - Line별로 Master 행(회색) + 매칭되는 Instrument 행이 나열됩니다.
    - Process Data가 다르면 빨간색, 같으면 초록색으로 표시됩니다.
@@ -60,9 +64,12 @@ Validation 시트에서는 Line No / Tag No / Type 다음, `P_Oper` → `P_Desig
 
 - Operating Pressure: Master 값이 `10~15` 같은 범위면 Instrument 값이 그 범위 안에 있으면 PASS
 - Max Design Pressure / Max Operating Temperature / Min·Max Design Temperature: 허용 오차(0.05) 이내면 PASS
-- Operating Temperature: Master 값이 `AMB`면 N/A 처리, 그 외에는 문자열 완전 일치
+- Operating Temperature: Master 값이 `AMB`면 N/A 처리, 그 외에는 허용 오차(0.05) 이내면 PASS
+  (엑셀에서 같은 값이 컬럼마다 "37"/"37.0"처럼 다르게 저장되는 경우가 있어서, 문자열 비교 대신
+  숫자로 비교합니다)
 - 최종 PASS/FAIL은 Operating Pressure, Max Design Pressure, Max Operating Temperature,
   Min/Max Design Temperature 기준으로 판정됩니다 (Operating Temperature는 AMB 표기가 흔해 판정에서 제외)
+- Line(Master) 행의 Result는 그 Line에 속한 Instrument 중 하나라도 FAIL이면 FAIL로 표시됩니다
 
 ## 컬럼 자동 인식이 실패하기 쉬운 경우와 대응
 

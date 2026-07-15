@@ -610,7 +610,21 @@ class MappingDialog(tk.Toplevel):
         if not row or row == "sep":
             return
         sm, df, merges = self._row_context(row)
-        EditRowDialog(self, sm, df, merges, lambda: self._refresh_row(row))
+        EditRowDialog(self, sm, df, merges, lambda: self._on_row_edited(row, sm))
+
+    def _on_row_edited(self, row, sm):
+        # Sibling sheets sharing the same mapping key (the " - PE"/" - HE"/
+        # " - BU" variants of one instrument type) are assumed to share the
+        # same column layout, so a manual correction on one applies to all of
+        # them right away - otherwise saving later could non-deterministically
+        # keep whichever variant happened to be processed last.
+        if row != "master":
+            for i, other in enumerate(self.sheet_mappings):
+                if other is not sm and other.key == sm.key:
+                    other.mapping = dict(sm.mapping)
+                    other.source = dict(sm.source)
+                    self._refresh_row(str(i))
+        self._refresh_row(row)
 
     def _on_motion(self, event):
         def hide():

@@ -206,7 +206,11 @@ def compare_temp_op(master, inst) -> str:
     master_s = str(master).strip().upper()
     if master_s == "AMB":
         return "N/A"
-    return "PASS" if str(master).strip() == str(inst).strip() else "FAIL"
+    # Numeric tolerance, not exact string match: Excel often reads the same
+    # value as "37" in one column and "37.0" in another (a column becomes
+    # float dtype the moment ANY row in it has a decimal), which would
+    # otherwise mark a genuinely matching temperature as FAIL.
+    return compare_numeric(master, inst, 0.05)
 
 
 COMPARATORS = {
@@ -562,14 +566,42 @@ class InstrumentRow:
 MASTER_KEY = "__MASTER__"
 
 
+def _saved_mapping(saved_config: dict, key: str) -> dict | None:
+    """Column mapping is keyed by the sheet-family key (e.g. "_410_ Control VV
+    (Globe)", shared by that sheet's " - PE"/" - HE"/" - BU" variants, since
+    they always share the same column layout) - so confirming one variant's
+    mapping instantly resolves all the others too."""
+    mappings = saved_config.get("_mappings")
+    if mappings is not None:
+        m = mappings.get(key)
+        return dict(m) if m is not None else None
+    # Legacy config (pre-dating the _mappings/_includes split): a flat
+    # {key: mapping} or {key: {"mapping": ..., "include": ...}} entry.
+    entry = saved_config.get(key)
+    if entry is None:
+        return None
+    return dict(entry["mapping"]) if "mapping" in entry else dict(entry)
+
+
+def _saved_include(saved_config: dict, sheet_name: str) -> bool:
+    """Include/exclude is keyed by the FULL sheet name, not the shared family
+    key above - PE/HE/BU variants can have the same column layout but
+    different inclusion decisions."""
+    includes = saved_config.get("_includes")
+    if includes is not None and sheet_name in includes:
+        return bool(includes[sheet_name])
+    return True
+
+
 def scan_master_file(master_file: str, saved_config: dict) -> tuple[SheetMapping, pd.DataFrame, list]:
     xl = pd.ExcelFile(master_file)
     first_sheet = xl.sheet_names[0]
     df = xl.parse(first_sheet, header=None)
     merges = get_merged_ranges_map(master_file).get(first_sheet, [])
-    if MASTER_KEY in saved_config:
-        mapping = dict(saved_config[MASTER_KEY])
-        source = {f: "saved" for f in mapping}
+    saved_mapping = _saved_mapping(saved_config, MASTER_KEY)
+    if saved_mapping is not None:
+        mapping = saved_mapping
+        source = {f: ("saved" if mapping.get(f) else "missing") for f in mapping}
     else:
         auto_map = auto_detect_mapping(df, merges)
         mapping, source = resolve_mapping(MASTER_DEFAULT, auto_map)
@@ -646,14 +678,19 @@ def scan_instrument_files(files: list[str], saved_config: dict, progress=None) -
             key = normalize_sheet_name(sheet)
             family = detect_family(sheet)
 
-            if key in saved_config:
-                mapping = dict(saved_config[key])
-                source = {f: "saved" for f in mapping}
+            explicit_include = saved_config.get("_includes", {}).get(sheet)
+            saved_mapping = _saved_mapping(saved_config, key)
+            if saved_mapping is not None:
+                mapping = saved_mapping
+                source = {f: ("saved" if mapping.get(f) else "missing") for f in mapping}
             else:
                 auto_map = auto_detect_mapping(df, merges)
                 mapping, source = resolve_mapping(DEFAULT_MAP.get(family, {}), auto_map)
 
-            include = family is not None or any(s == "auto" for s in source.values())
+            if explicit_include is not None:
+                include = bool(explicit_include)
+            else:
+                include = family is not None or any(s == "auto" for s in source.values())
             results.append(SheetMapping(file=file, sheet=sheet, key=key, family=family,
                                          mapping=mapping, source=source, include=include))
     return results, df_cache, merge_cache
@@ -714,10 +751,27 @@ def load_config(path: str) -> dict:
 
 
 def save_config(path: str, sheet_mappings: list[SheetMapping]) -> None:
+    """Persists every sheet's mapping AND include/exclude decision (not just
+    included sheets), so re-scanning the same sheet names later - even from a
+    differently-named file, e.g. one with today's date in the filename -
+    restores exactly what was confirmed instead of asking again.
+
+    Mapping is keyed by the shared family key (normalize_sheet_name) so a
+    single confirmation covers every " - PE"/" - HE"/" - BU" variant; include
+    is keyed by the full sheet name since that decision is sheet-specific."""
     config = load_config(path)
+    mappings = config.setdefault("_mappings", {})
+    includes = config.setdefault("_includes", {})
+    # Migrate any pre-existing legacy flat entries (from before this split)
+    # into the new structure instead of leaving them stranded and unused.
+    for legacy_key in [k for k in config if k not in ("_mappings", "_includes")]:
+        legacy = config.pop(legacy_key)
+        if isinstance(legacy, dict):
+            mappings.setdefault(legacy_key, legacy.get("mapping", legacy))
+
     for sm in sheet_mappings:
-        if sm.include:
-            config[sm.key] = sm.mapping
+        mappings[sm.key] = sm.mapping
+        includes[sm.sheet] = sm.include
     Path(path).write_text(json.dumps(config, indent=4, ensure_ascii=False), encoding="utf-8")
 
 
