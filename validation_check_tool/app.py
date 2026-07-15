@@ -497,7 +497,6 @@ class MappingDialog(tk.Toplevel):
         filter_entry.bind("<KeyRelease>", lambda e: self._refresh_tree())
         ttk.Label(filter_row, text="(입력하는 대로 표에서 일치하는 시트만 보여줌 - 엑셀 필터처럼)",
                   background=COLORS["bg"], style="Status.TLabel").pack(side="left", padx=(6, 0))
-        ttk.Button(filter_row, text="지우기", command=self._clear_filter).pack(side="left", padx=(8, 0))
 
         process_headers = {
             "p_op": "Op.Press", "p_des_max": "Max Des.Press",
@@ -596,10 +595,6 @@ class MappingDialog(tk.Toplevel):
             if filter_text and filter_text not in sm.sheet.upper():
                 continue
             self.tree.insert("", "end", iid=str(i), values=self._row_values(sm), tags=(self._row_tag(sm),))
-
-    def _clear_filter(self):
-        self.filter_var.set("")
-        self._refresh_tree()
 
     def _on_click(self, event):
         region = self.tree.identify_region(event.x, event.y)

@@ -62,13 +62,13 @@ Validation 시트에서는 Line No / Tag No / Type 다음, `P_Oper` → `P_Desig
 
 ## 비교 규칙
 
+- 모든 숫자 비교는 **사실상 완전 일치**를 요구합니다 (부동소수점 오차 정도만 허용, 예:
+  4.899999999999999 vs 4.9는 PASS). 3.975 vs 4처럼 실제로 다른 값은 조금만 달라도 FAIL로
+  표시됩니다.
 - Operating Pressure: Master 값이 `10~15` 같은 범위면 Instrument 값이 그 범위 안에 있으면 PASS
-- Max Design Pressure / Max Operating Temperature / Min·Max Design Temperature: 허용 오차(0.05) 이내면 PASS
-- Operating Temperature: Master 값이 `AMB`면 N/A 처리, 그 외에는 허용 오차(0.05) 이내면 PASS
-  (엑셀에서 같은 값이 컬럼마다 "37"/"37.0"처럼 다르게 저장되는 경우가 있어서, 문자열 비교 대신
-  숫자로 비교합니다)
-- 최종 PASS/FAIL은 Operating Pressure, Max Design Pressure, Max Operating Temperature,
-  Min/Max Design Temperature 기준으로 판정됩니다 (Operating Temperature는 AMB 표기가 흔해 판정에서 제외)
+- Operating Temperature: Master 값이 `AMB`면 Instrument 값도 `AMB`일 때만 PASS - 구체적인
+  숫자가 들어있으면 FAIL로 표시됩니다 (컬럼을 잘못 매핑했을 가능성이 높다는 신호이기도 합니다)
+- 최종 PASS/FAIL은 Process Data 6개 항목 전부를 기준으로 판정됩니다
 - Line(Master) 행의 Result는 그 Line에 속한 Instrument 중 하나라도 FAIL이면 FAIL로 표시됩니다
 
 ## 컬럼 자동 인식이 실패하기 쉬운 경우와 대응

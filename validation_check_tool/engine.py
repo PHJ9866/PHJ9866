@@ -183,7 +183,14 @@ def extract_numeric(value) -> float | None:
     return float(match.group()) if match else None
 
 
-def compare_numeric(master, inst, tolerance: float = 0.05) -> str:
+# Not an engineering-judgment tolerance - just enough to absorb float
+# representation noise (e.g. a value read back as 4.899999999999999 instead
+# of 4.9). Any real difference, however small, is a genuine mismatch and
+# should surface as FAIL rather than being silently accepted.
+EXACT_TOLERANCE = 1e-6
+
+
+def compare_numeric(master, inst, tolerance: float = EXACT_TOLERANCE) -> str:
     m = extract_numeric(master)
     i = extract_numeric(inst)
     if m is None or i is None:
@@ -201,20 +208,25 @@ def compare_pressure_op(master, inst) -> str:
             if value is None:
                 return "FAIL"
             return "PASS" if low <= value <= high else "FAIL"
-        return compare_numeric(master_text, inst_text, 0.05)
+        return compare_numeric(master_text, inst_text)
     except Exception:
         return "FAIL"
 
 
 def compare_temp_op(master, inst) -> str:
     master_s = str(master).strip().upper()
+    inst_s = str(inst).strip().upper()
     if master_s == "AMB":
-        return "N/A"
+        # "AMB" isn't a placeholder that excuses any value - it means the
+        # datasheet should say AMB too. A specific number there instead is a
+        # real mismatch (often a sign the wrong column got mapped) and should
+        # be flagged, not silently waved through.
+        return "PASS" if inst_s == "AMB" else "FAIL"
     # Numeric tolerance, not exact string match: Excel often reads the same
     # value as "37" in one column and "37.0" in another (a column becomes
     # float dtype the moment ANY row in it has a decimal), which would
     # otherwise mark a genuinely matching temperature as FAIL.
-    return compare_numeric(master, inst, 0.05)
+    return compare_numeric(master, inst)
 
 
 COMPARATORS = {
@@ -226,10 +238,7 @@ COMPARATORS = {
     "t_max": compare_numeric,
 }
 
-# t_op is intentionally excluded from the overall PASS/FAIL verdict: it is very
-# often "AMB" on the line list against a real number on the datasheet, which is
-# an expected, not an erroneous, difference.
-FIELDS_IN_VERDICT = ["p_op", "p_des_max", "t_op_max", "t_min", "t_max"]
+FIELDS_IN_VERDICT = ["p_op", "p_des_max", "t_op", "t_op_max", "t_min", "t_max"]
 
 
 # =====================================================
