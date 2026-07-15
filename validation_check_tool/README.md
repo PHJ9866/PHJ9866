@@ -83,13 +83,27 @@ Validation 시트에서는 Line No / Tag No / Type 다음, `P_Oper` → `P_Desig
   확인해서 텍스트 컬럼이나 빈 컬럼을 걸러냅니다. Test/Hydrotest Pressure 컬럼도 제외됩니다.
 - **Line No 헤더가 "No"처럼 무의미한 경우**: 키워드로 못 찾으면 데이터 모양(301-ATM-0007처럼
   대시로 구분된 형태)으로 Line No 컬럼을 직접 찾아냅니다.
-- **Differential Pressure처럼 별도의 Min/Nor/Max 그룹이 있는 경우**: DP 트랜스미터 자체의
-  차압 범위(Differential Pressure)는 제외하고, 실제 공정 압력을 나타내는 "Pressure" 그룹의
+- **Differential Pressure/Pressure Drop처럼 별도의 Min/Nor/Max 그룹이 있는 경우**: DP
+  트랜스미터 자체의 차압(Differential Pressure)이나 유량계·밸브 등 인라인 기기에서 발생하는
+  압력 손실(Pressure Drop)은 제외하고, 실제 공정 압력을 나타내는 "Pressure" 그룹의
   Nor(Normal, 운전값) 컬럼을 Operating Pressure로 사용합니다.
 - 그래도 틀리게 잡히면, ③ 매핑 화면에서 해당 행을 더블클릭해 직접 컬럼을 지정하면 됩니다.
+
+## 매핑 정보는 어디에 저장되나
+
+`validation_mapping_config.json` 파일이 **Line List(Master) 파일이 있는 폴더**에 자동으로
+생성됩니다 (도구 코드가 있는 폴더가 아닙니다). 그래서:
+
+- 이 도구 자체를 업데이트해서 새 폴더에 다시 받아도, Line List가 있는 원래 작업 폴더는
+  그대로이므로 이전에 확인한 매핑이 계속 적용됩니다.
+- Instrument 파일 이름이 매일 바뀌어도(파일명 끝 날짜 등) 시트 이름만 같으면 다시 물어보지
+  않습니다.
+- 컬럼 매핑은 " - PE"/" - HE"/" - BU" 같은 접미사를 뗀 시트 종류 단위로 공유되고, 포함/제외
+  여부는 시트 이름 전체 단위로 따로 저장됩니다.
 
 ## 파일 구성
 
 - `app.py` : GUI (tkinter)
 - `engine.py` : 파일 파싱, 컬럼 자동 매핑, 비교 로직, 리포트 생성
-- `config.json` : 시트별로 확인된 컬럼 매핑 저장 (자동 생성, 최초 실행 시 없음)
+- `validation_mapping_config.json` : 시트별 컬럼 매핑 + 포함/제외 여부 저장
+  (Line List 파일이 있는 폴더에 자동 생성)

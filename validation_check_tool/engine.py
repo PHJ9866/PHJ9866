@@ -41,8 +41,15 @@ def _lacks(text: str, *keywords: str) -> bool:
     return not any(re.search(k, text) for k in keywords)
 
 
+# Pressure/temperature columns that describe something other than the actual
+# process value - a DP transmitter's own span, a hydrotest rating, or the
+# pressure/head LOST across an in-line device (orifice, vortex meter, valve,
+# strainer...) - never the line's Operating/Design value itself.
+_NOT_PROCESS_VALUE = (r"TEST", r"STRENGTH", r"HYDRO", r"DIFFERENTIAL", r"\bDROP\b", r"LOSS")
+
+
 def _match_p_des_max(t: str) -> bool:
-    if not _has(t, r"PRESS", r"DESIGN") or _has(t, r"DIFFERENTIAL"):
+    if not _has(t, r"PRESS", r"DESIGN") or not _lacks(t, *_NOT_PROCESS_VALUE):
         return False
     if _has(t, r"MAX"):
         return True
@@ -55,10 +62,7 @@ def _match_p_des_max(t: str) -> bool:
 def _match_p_op(t: str) -> bool:
     if not _has(t, r"PRESS") or _has(t, r"DESIGN"):
         return False
-    # Hydrotest/strength-test pressure and Differential Pressure (a DP
-    # transmitter's own span, not the line's operating pressure) columns also
-    # read "... Pressure" but are never the operating pressure.
-    if not _lacks(t, r"TEST", r"STRENGTH", r"HYDRO", r"DIFFERENTIAL"):
+    if not _lacks(t, *_NOT_PROCESS_VALUE):
         return False
     if _has(t, r"NOR(MAL)?"):
         return True
@@ -745,9 +749,14 @@ def load_instrument_rows(sheet_mappings: list[SheetMapping], df_cache: dict) -> 
 
 def load_config(path: str) -> dict:
     p = Path(path)
-    if p.exists():
+    if not p.exists():
+        return {}
+    try:
         return json.loads(p.read_text(encoding="utf-8"))
-    return {}
+    except (json.JSONDecodeError, OSError):
+        # A corrupt/unreadable config file shouldn't crash the scan - just
+        # treat it as if nothing had been saved yet.
+        return {}
 
 
 def save_config(path: str, sheet_mappings: list[SheetMapping]) -> None:

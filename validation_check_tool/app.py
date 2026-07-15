@@ -20,7 +20,7 @@ from tkinter import ttk
 
 import engine
 
-CONFIG_PATH = str(Path(__file__).resolve().parent / "config.json")
+CONFIG_FILENAME = "validation_mapping_config.json"
 
 COLORS = {
     "bg": "#F4F6FB",
@@ -138,6 +138,15 @@ class MainApp(tk.Tk):
         self._build_footer()
         self.after(100, self._poll_queue)
 
+    def config_path(self) -> str:
+        # Kept next to the Line List file (the user's own project folder),
+        # not next to this script - re-downloading/re-extracting the tool
+        # itself (e.g. to pick up a fix) must not orphan previously-confirmed
+        # mappings, and an Instrument file whose name changes daily lives in
+        # the same stable project folder as the Line List.
+        folder = Path(self.master_file).resolve().parent if self.master_file else Path(__file__).resolve().parent
+        return str(folder / CONFIG_FILENAME)
+
     # ---------------------------------------------------------- layout
 
     def _build_header(self):
@@ -183,7 +192,7 @@ class MainApp(tk.Tk):
         row3 = ttk.Frame(c3, style="Card.TFrame")
         row3.pack(fill="x")
         ttk.Label(row3, text="모든 시트를 스캔해서 Tag / Line No / Process Data 컬럼을 자동으로 찾고,\n"
-                              "결과를 표로 보여줘요. 잘못 잡힌 컬럼은 그 자리에서 바로 고칠 수 있어요.",
+                              "결과를 표로 보여줌. 잘못 잡힌 컬럼은 그 자리에서 바로 고칠 수 있음.",
                   style="Card.TLabel").pack(side="left", fill="x", expand=True)
         ttk.Button(row3, text="스캔 & 매핑 확인", style="Accent.TButton",
                    command=self.scan_and_review).pack(side="right")
@@ -196,7 +205,7 @@ class MainApp(tk.Tk):
         row4 = ttk.Frame(c4, style="Card.TFrame")
         row4.pack(fill="x")
         ttk.Label(row4, text="Line List 기준으로 Instrument를 매칭하고, Process Data가 다르면\n"
-                              "엑셀에서 바로 하이라이트 처리된 리포트를 만들어요.",
+                              "엑셀에서 바로 하이라이트 처리된 리포트를 만듦.",
                   style="Card.TLabel").pack(side="left", fill="x", expand=True)
         self.generate_btn = ttk.Button(row4, text="Report 생성", style="Accent.TButton",
                                         command=self.generate_report, state="disabled")
@@ -293,10 +302,10 @@ class MainApp(tk.Tk):
 
     def scan_and_review(self):
         if not self.master_file:
-            messagebox.showwarning("파일 필요", "Line List (Master) 파일을 먼저 선택하세요.")
+            messagebox.showwarning("파일 필요", "Line List (Master) 파일을 먼저 선택할 것.")
             return
         if not self.instrument_files:
-            messagebox.showwarning("파일 필요", "Instrument Datasheet 파일을 1개 이상 추가하세요.")
+            messagebox.showwarning("파일 필요", "Instrument Datasheet 파일을 1개 이상 추가할 것.")
             return
 
         self.set_status("스캔 중...")
@@ -304,7 +313,8 @@ class MainApp(tk.Tk):
         self.progress.start(12)
 
         def work():
-            saved_config = engine.load_config(CONFIG_PATH)
+            saved_config = engine.load_config(self.config_path())
+            self.log(f"매핑 저장 위치: {self.config_path()}")
             self.log("Line List 스캔 중...")
             master_sm, master_df, master_merges = engine.scan_master_file(self.master_file, saved_config)
             self.log("Instrument Datasheet 스캔 중 (모든 시트)...")
@@ -333,13 +343,25 @@ class MainApp(tk.Tk):
 
     def _on_mapping_confirmed(self):
         self.mapping_confirmed = True
-        engine.save_config(CONFIG_PATH, [self.master_sm, *self.sheet_mappings])
+        try:
+            engine.save_config(self.config_path(), [self.master_sm, *self.sheet_mappings])
+        except OSError as e:
+            # Silently swallowing this would be the worst outcome here: the
+            # user would only find out a scan/edit later, when everything
+            # looks reset. Surface it immediately instead.
+            self.log(f"매핑 저장 실패: {e}", "err")
+            messagebox.showerror(
+                "매핑 저장 실패",
+                f"매핑 정보를 저장하지 못함:\n{self.config_path()}\n\n"
+                f"오류: {e}\n\n"
+                "이 폴더에 쓰기 권한이 있는지 확인 필요. 저장이 안 되면 다음에 다시 "
+                "스캔할 때 지금 고친 매핑이 사라짐.")
         included = sum(1 for sm in self.sheet_mappings if sm.include)
         self.mapping_status.configure(
             text=f"매핑 확인 완료 · Instrument 시트 {included}/{len(self.sheet_mappings)}개 포함",
             style="Card.TLabel")
         self.generate_btn.configure(state="normal")
-        self.log("매핑 확정 및 저장 완료", "ok")
+        self.log(f"매핑 확정 및 저장 완료: {self.config_path()}", "ok")
 
     # ---------------------------------------------------------- report generation
 
@@ -370,7 +392,7 @@ class MainApp(tk.Tk):
             instrument_rows = engine.load_instrument_rows(self.sheet_mappings, self.df_cache)
             self.log(f"Instrument 개수: {len(instrument_rows)}")
             if not instrument_rows:
-                self.log("경고: 매칭된 Instrument가 0개입니다. Instrument 시트의 Line/Tag 매핑을 확인하세요.", "err")
+                self.log("경고: 매칭된 Instrument가 0개임. Instrument 시트의 Line/Tag 매핑 확인 필요.", "err")
 
             def progress_cb(msg):
                 self.log(msg)
@@ -383,13 +405,13 @@ class MainApp(tk.Tk):
     def _on_master_empty(self):
         self.generate_btn.configure(state="normal")
         self.set_status("대기 중")
-        self.log("Line List에서 Line No를 하나도 찾지 못했습니다.", "err")
+        self.log("Line List에서 Line No를 하나도 찾지 못함.", "err")
         messagebox.showerror(
             "Line List 인식 실패",
-            "Line List 파일에서 Line No를 하나도 찾지 못해서 리포트가 비어있게 됩니다.\n\n"
+            "Line List 파일에서 Line No를 하나도 찾지 못해서 리포트가 비어있게 됨.\n\n"
             "③ 스캔 & 매핑 확인 화면에서 'Line List (Master)' 행을 더블클릭해\n"
-            "Line No 컬럼(그리고 Process Data 컬럼)이 실제 파일과 맞는지 확인해 주세요.\n"
-            "오른쪽에 뜨는 미리보기 값으로 맞는 컬럼인지 확인할 수 있어요."
+            "Line No 컬럼(그리고 Process Data 컬럼)이 실제 파일과 맞는지 확인 필요.\n"
+            "오른쪽에 뜨는 미리보기 값으로 맞는 컬럼인지 확인 가능."
         )
 
     def _on_report_done(self, stats: engine.ReportStats, output_path: str):
@@ -450,8 +472,8 @@ class MappingDialog(tk.Toplevel):
     def _build(self):
         top = ttk.Frame(self, padding=(16, 12, 16, 0))
         top.pack(fill="x")
-        ttk.Label(top, text="자동으로 인식된 컬럼 매핑이에요. 색이 있는 행은 다시 확인해 주세요. "
-                             "행을 더블클릭하면 직접 수정할 수 있어요.",
+        ttk.Label(top, text="자동으로 인식된 컬럼 매핑임. 색이 있는 행은 다시 확인 필요. "
+                             "행을 더블클릭하면 직접 수정 가능.",
                   style="Card.TLabel", background=COLORS["bg"]).pack(anchor="w")
 
         legend = ttk.Frame(top)
@@ -473,7 +495,7 @@ class MappingDialog(tk.Toplevel):
         filter_entry = tk.Entry(filter_row, textvariable=self.filter_var, width=18, font=("Segoe UI", 9))
         filter_entry.pack(side="left")
         filter_entry.bind("<KeyRelease>", lambda e: self._refresh_tree())
-        ttk.Label(filter_row, text="(입력하는 대로 표에서 일치하는 시트만 보여줘요 - 엑셀 필터처럼)",
+        ttk.Label(filter_row, text="(입력하는 대로 표에서 일치하는 시트만 보여줌 - 엑셀 필터처럼)",
                   background=COLORS["bg"], style="Status.TLabel").pack(side="left", padx=(6, 0))
         ttk.Button(filter_row, text="지우기", command=self._clear_filter).pack(side="left", padx=(8, 0))
 
@@ -677,7 +699,7 @@ class MappingDialog(tk.Toplevel):
         (case-insensitive); every other sheet is excluded."""
         text = self.filter_var.get().strip().upper()
         if not text:
-            messagebox.showinfo("필터 필요", "먼저 위쪽 시트 이름 필터에 텍스트를 입력하세요.")
+            messagebox.showinfo("필터 필요", "먼저 위쪽 시트 이름 필터에 텍스트를 입력할 것.")
             return
         for i, sm in enumerate(self.sheet_mappings):
             sm.include = text in sm.sheet.upper()
@@ -713,8 +735,8 @@ class EditRowDialog(tk.Toplevel):
         header.pack(fill="x")
         ttk.Label(header, text=f"{Path(self.sm.file).name} / {self.sm.sheet}",
                   font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        ttk.Label(header, text="엑셀 컬럼 문자(A, B, AC ...)를 입력하면 오른쪽에 실제 헤더/샘플 값이 나와요. "
-                              "해당 항목이 없는 시트는 비워두면 됩니다.",
+        ttk.Label(header, text="엑셀 컬럼 문자(A, B, AC ...)를 입력하면 오른쪽에 실제 헤더/샘플 값이 나옴. "
+                              "해당 항목이 없는 시트는 비워두면 됨.",
                   style="Status.TLabel").pack(anchor="w")
 
         # Buttons are packed to the bottom first so they always stay visible and
@@ -806,7 +828,7 @@ class EditRowDialog(tk.Toplevel):
             if val and not re.fullmatch(r"[A-Z]{1,3}", val):
                 messagebox.showwarning(
                     "잘못된 입력",
-                    f"{engine.FIELD_LABELS[f]}: 컬럼은 A~Z 문자로만 입력하세요.\n(비워두면 매핑하지 않습니다.)")
+                    f"{engine.FIELD_LABELS[f]}: 컬럼은 A~Z 문자로만 입력할 것.\n(비워두면 매핑하지 않음.)")
                 return
             values[f] = val
         for f, val in values.items():
