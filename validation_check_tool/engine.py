@@ -42,10 +42,14 @@ def _lacks(text: str, *keywords: str) -> bool:
 
 
 # Pressure/temperature columns that describe something other than the actual
-# process value - a DP transmitter's own span, a hydrotest rating, or the
+# process value - a DP transmitter's own span, a hydrotest rating, the
 # pressure/head LOST across an in-line device (orifice, vortex meter, valve,
-# strainer...) - never the line's Operating/Design value itself.
-_NOT_PROCESS_VALUE = (r"TEST", r"STRENGTH", r"HYDRO", r"DIFFERENTIAL", r"\bDROP\b", r"LOSS")
+# strainer...), or a thermodynamic property of the fluid itself (critical
+# point, vapor pressure) - never the line's Operating/Design value.
+_NOT_PROCESS_VALUE = (
+    r"TEST", r"STRENGTH", r"HYDRO", r"DIFFERENTIAL", r"\bDROP\b", r"LOSS",
+    r"CRITICAL", r"VAPOR",
+)
 
 
 def _match_p_des_max(t: str) -> bool:
@@ -307,6 +311,22 @@ def _effective_header_grid(df: pd.DataFrame, n_rows: int,
         for r in range(max(min_row, 0), min(max_row, n_rows - 1) + 1):
             for c in range(min_col, min(max_col, ncols - 1) + 1):
                 grid[r][c] = top_val
+
+    # Not every grouped header is an actual Excel merge - some sheets just
+    # leave the cells next to the group title blank without merging them.
+    # Forward-fill a row's group title into blank cells to its right, but
+    # ONLY into columns that have their own content somewhere else in the
+    # header block (a real sub-column, e.g. "Min"/"Nor"/"Max" one row down) -
+    # a column that's blank in every header row is a genuine spacer, not part
+    # of the group, and must not inherit a neighboring label.
+    has_content = [any(grid[r][c] is not None for r in range(n_rows)) for c in range(ncols)]
+    for r in range(n_rows):
+        last = None
+        for c in range(ncols):
+            if grid[r][c] is not None:
+                last = grid[r][c]
+            elif last is not None and has_content[c]:
+                grid[r][c] = last
     return grid
 
 
@@ -691,8 +711,12 @@ def scan_instrument_files(files: list[str], saved_config: dict, progress=None) -
             key = normalize_sheet_name(sheet)
             family = detect_family(sheet)
 
+            # Mapping and include are both keyed by the FULL sheet name - a
+            # manual fix on one " - PE"/" - HE"/" - BU" variant must not
+            # silently change its siblings, even though they usually share
+            # the same column layout.
             explicit_include = saved_config.get("_includes", {}).get(sheet)
-            saved_mapping = _saved_mapping(saved_config, key)
+            saved_mapping = _saved_mapping(saved_config, sheet)
             if saved_mapping is not None:
                 mapping = saved_mapping
                 source = {f: ("saved" if mapping.get(f) else "missing") for f in mapping}
@@ -774,9 +798,9 @@ def save_config(path: str, sheet_mappings: list[SheetMapping]) -> None:
     differently-named file, e.g. one with today's date in the filename -
     restores exactly what was confirmed instead of asking again.
 
-    Mapping is keyed by the shared family key (normalize_sheet_name) so a
-    single confirmation covers every " - PE"/" - HE"/" - BU" variant; include
-    is keyed by the full sheet name since that decision is sheet-specific."""
+    Both mapping and include are keyed by the full sheet name: a manual fix
+    on one " - PE"/" - HE"/" - BU" variant must not silently change its
+    siblings, even if they happen to share the same column layout."""
     config = load_config(path)
     mappings = config.setdefault("_mappings", {})
     includes = config.setdefault("_includes", {})
@@ -788,7 +812,7 @@ def save_config(path: str, sheet_mappings: list[SheetMapping]) -> None:
             mappings.setdefault(legacy_key, legacy.get("mapping", legacy))
 
     for sm in sheet_mappings:
-        mappings[sm.key] = sm.mapping
+        mappings[sm.sheet] = sm.mapping
         includes[sm.sheet] = sm.include
     Path(path).write_text(json.dumps(config, indent=4, ensure_ascii=False), encoding="utf-8")
 
