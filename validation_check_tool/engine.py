@@ -942,7 +942,8 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
         if progress and i % 25 == 0:
             progress(f"리포트 작성 중: {i}/{len(master_lines)}")
 
-        matches = [inst for inst in instrument_rows if line.line_no in inst.line_no]
+        matches = [inst for inst in instrument_rows
+                   if line.line_no and line.line_no.upper() in inst.line_no.upper()]
 
         # Evaluate every match's PASS/FAIL before writing the MASTER row, so its
         # Result cell can roll up "FAIL" whenever any related Instrument fails -
