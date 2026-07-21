@@ -44,16 +44,30 @@ def _lacks(text: str, *keywords: str) -> bool:
 # Pressure/temperature columns that describe something other than the actual
 # process value - a DP transmitter's own span, a hydrotest rating, the
 # pressure/head LOST across an in-line device (orifice, vortex meter, valve,
-# strainer...), or a thermodynamic property of the fluid itself (critical
-# point, vapor pressure) - never the line's Operating/Design value.
+# strainer...), a thermodynamic property of the fluid itself (critical point,
+# vapor pressure), a PSV/rupture-disc-specific rating (set/back/overpressure/
+# blowdown), or just an adjacent non-process column (flow rate, viscosity,
+# density, service/fluid description, unit-of-measure, size/class) - never the
+# line's actual Operating/Design value.
 _NOT_PROCESS_VALUE = (
     r"TEST", r"STRENGTH", r"HYDRO", r"DIFFERENTIAL", r"\bDROP\b", r"LOSS",
     r"CRITICAL", r"VAPOR",
+    r"FLOW", r"VISCOSITY", r"DENSITY", r"SERVICE", r"UOM", r"UNIT",
+    r"\bSIZE\b", r"CLASS", r"FLUID", r"DESCRIPTION",
+    r"BACK\s*PRESSURE", r"BUILT\s*UP", r"SUPERIMPOSED", r"OVERPRESSURE",
+    r"BLOWDOWN", r"SET\s*PRESSURE", r"PSET", r"RELIEVING",
 )
 
 
+def _is_bad_process_header(t: str) -> bool:
+    """True if the header text belongs to one of the _NOT_PROCESS_VALUE
+    categories - flow/fluid-property/PSV-rating/description columns that
+    should never be picked as an Operating/Design Pressure or Temperature."""
+    return not _lacks(t, *_NOT_PROCESS_VALUE)
+
+
 def _match_p_des_max(t: str) -> bool:
-    if not _has(t, r"PRESS", r"DESIGN") or not _lacks(t, *_NOT_PROCESS_VALUE):
+    if _is_bad_process_header(t) or not _has(t, r"PRESS", r"DESIGN"):
         return False
     if _has(t, r"MAX"):
         return True
@@ -64,9 +78,7 @@ def _match_p_des_max(t: str) -> bool:
 
 
 def _match_p_op(t: str) -> bool:
-    if not _has(t, r"PRESS") or _has(t, r"DESIGN"):
-        return False
-    if not _lacks(t, *_NOT_PROCESS_VALUE):
+    if _is_bad_process_header(t) or not _has(t, r"PRESS") or _has(t, r"DESIGN"):
         return False
     if _has(t, r"NOR(MAL)?"):
         return True
@@ -78,11 +90,34 @@ def _match_p_op(t: str) -> bool:
 
 
 def _match_t_op(t: str) -> bool:
-    if not _has(t, r"TEMP") or _has(t, r"DESIGN"):
+    if _is_bad_process_header(t) or not _has(t, r"TEMP") or _has(t, r"DESIGN"):
         return False
     if _has(t, r"NOR(MAL)?"):
         return True
     return _lacks(t, r"\bMIN\b", r"\bMAX\b")
+
+
+def _match_t_op_max(t: str) -> bool:
+    return not _is_bad_process_header(t) and _has(t, r"TEMP", r"MAX") and _lacks(t, r"DESIGN")
+
+
+def _match_t_min(t: str) -> bool:
+    return not _is_bad_process_header(t) and _has(t, r"TEMP", r"MIN", r"DESIGN")
+
+
+def _match_t_max(t: str) -> bool:
+    return not _is_bad_process_header(t) and _has(t, r"TEMP", r"MAX", r"DESIGN")
+
+
+def _match_line_no(t: str) -> bool:
+    # Requires "Line" AND "No"/"Number" together (not just "Line" alone,
+    # which can false-match an unrelated "Insulation Line"/"Tracing Line"
+    # column), and excludes columns that are clearly about something else
+    # entirely (service/size/class/fluid/diameter/unit) despite mentioning
+    # "line" somewhere in a longer header.
+    if not (re.search(r"\bLINE\b", t) and re.search(r"\b(NO\.?|NUMBER)\b", t)):
+        return False
+    return _lacks(t, r"SERVICE", r"\bSIZE\b", r"CLASS", r"FLUID", r"DIAMETER", r"UOM", r"UNIT", r"DESCRIPTION")
 
 
 # Header cells for grouped columns (e.g. a merged "Temperature" label above
@@ -91,12 +126,12 @@ def _match_t_op(t: str) -> bool:
 # by presence/absence of each keyword rather than a fixed left-to-right sequence.
 FIELD_MATCHERS = {
     "tag": lambda t: bool(re.search(r"TAG", t)),
-    "line": lambda t: bool(re.search(r"\bLINE\b", t)),
+    "line": _match_line_no,
     "p_des_max": _match_p_des_max,
     "p_op": _match_p_op,
-    "t_max": lambda t: _has(t, r"TEMP", r"MAX", r"DESIGN"),
-    "t_op_max": lambda t: _has(t, r"TEMP", r"MAX") and _lacks(t, r"DESIGN"),
-    "t_min": lambda t: _has(t, r"TEMP", r"MIN", r"DESIGN"),
+    "t_max": _match_t_max,
+    "t_op_max": _match_t_op_max,
+    "t_min": _match_t_min,
     "t_op": _match_t_op,
 }
 
@@ -115,15 +150,17 @@ FAMILY_KEYWORDS = {
 }
 
 # These mirror the fixed columns the original script always assumed. "Min Design
-# Pressure" and "Max Operating Temperature" didn't exist as tracked fields back
-# then, so there's no legacy column for them - they're left for auto-detection /
-# manual mapping. The old single "Design Pressure" default is kept as the Max
-# Design Pressure default, since that's what it was actually being used for.
+# Pressure" didn't exist as a tracked field back then, so there's no legacy
+# column for it - left for auto-detection / manual mapping. The old single
+# "Design Pressure" default is kept as the Max Design Pressure default, since
+# that's what it was actually being used for. "Max Operating Temperature"
+# (t_op_max) defaults are the column immediately after Operating Temperature,
+# which is where it sits on the Baltic project's sheets.
 DEFAULT_MAP = {
-    "FT": {"tag": "B", "line": "I", "p_op": "X", "p_des_max": "BM", "t_op": "AC", "t_min": "BP", "t_max": "BR"},
-    "PT": {"tag": "B", "line": "I", "p_op": "W", "p_des_max": "AW", "t_op": "AB", "t_min": "AZ", "t_max": "BB"},
-    "VALVE": {"tag": "B", "line": "I", "p_op": "W", "p_des_max": "BL", "t_op": "AF", "t_min": "BO", "t_max": "BQ"},
-    "PSV": {"tag": "B", "line": "J", "p_op": "R", "p_des_max": "AK", "t_op": "V", "t_min": "AN", "t_max": "AP"},
+    "FT": {"tag": "B", "line": "I", "p_op": "X", "p_des_max": "BM", "t_op": "AC", "t_op_max": "AD", "t_min": "BP", "t_max": "BR"},
+    "PT": {"tag": "B", "line": "I", "p_op": "W", "p_des_max": "AW", "t_op": "AB", "t_op_max": "AC", "t_min": "AZ", "t_max": "BB"},
+    "VALVE": {"tag": "B", "line": "I", "p_op": "W", "p_des_max": "BL", "t_op": "AF", "t_op_max": "AG", "t_min": "BO", "t_max": "BQ"},
+    "PSV": {"tag": "B", "line": "J", "p_op": "R", "p_des_max": "AK", "t_op": "V", "t_op_max": "W", "t_min": "AN", "t_max": "AP"},
 }
 
 # Fallback used when the Line List's own headers don't match any FIELD_MATCHERS -
@@ -314,18 +351,25 @@ def _effective_header_grid(df: pd.DataFrame, n_rows: int,
 
     # Not every grouped header is an actual Excel merge - some sheets just
     # leave the cells next to the group title blank without merging them.
-    # Forward-fill a row's group title into blank cells to its right, but
-    # ONLY into columns that have their own content somewhere else in the
+    # Forward-fill a row's group title into blank cells to its right, but only
+    # into columns that (a) have their own content somewhere else in the
     # header block (a real sub-column, e.g. "Min"/"Nor"/"Max" one row down) -
-    # a column that's blank in every header row is a genuine spacer, not part
-    # of the group, and must not inherit a neighboring label.
-    has_content = [any(grid[r][c] is not None for r in range(n_rows)) for c in range(ncols)]
+    # a column blank in every header row is a genuine spacer and must not
+    # inherit a neighboring label - and (b) haven't ALREADY shown their own,
+    # different content in an earlier row: a column with its own standalone
+    # header above (like a lone "Operating Temperature" title with nothing
+    # below it) has already established its own identity and must not pick up
+    # a later row's neighboring group's label just because it happens to sit
+    # blank in that row.
+    original = [row[:] for row in grid]
+    has_content_anywhere = [any(original[r][c] is not None for r in range(n_rows)) for c in range(ncols)]
     for r in range(n_rows):
+        seen_above = [any(original[rr][c] is not None for rr in range(r)) for c in range(ncols)]
         last = None
         for c in range(ncols):
             if grid[r][c] is not None:
                 last = grid[r][c]
-            elif last is not None and has_content[c]:
+            elif last is not None and has_content_anywhere[c] and not seen_above[c]:
                 grid[r][c] = last
     return grid
 

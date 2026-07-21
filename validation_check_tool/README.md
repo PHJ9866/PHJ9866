@@ -84,10 +84,15 @@ Validation 시트에서는 Line No / Tag No / Type 다음, `P_Oper` → `P_Desig
   확인해서 텍스트 컬럼이나 빈 컬럼을 걸러냅니다. Test/Hydrotest Pressure 컬럼도 제외됩니다.
 - **Line No 헤더가 "No"처럼 무의미한 경우**: 키워드로 못 찾으면 데이터 모양(301-ATM-0007처럼
   대시로 구분된 형태)으로 Line No 컬럼을 직접 찾아냅니다.
-- **Operating/Design Pressure와 이름이 비슷한 다른 압력 그룹이 있는 경우**: DP 트랜스미터
-  자체의 차압(Differential Pressure), 인라인 기기의 압력 손실(Pressure Drop), 유체의
-  임계압력(Critical Pressure)·증기압(Vapor Pressure) 같은 항목은 전부 제외하고, 실제 공정
-  압력을 나타내는 "(Upstream) Pressure"/"Design Pressure" 그룹만 사용합니다.
+- **Operating/Design Pressure·Temperature와 이름이 비슷한 다른 항목이 있는 경우**: DP
+  트랜스미터 자체의 차압(Differential Pressure), 인라인 기기의 압력 손실(Pressure Drop),
+  유체의 임계압력(Critical Pressure)·증기압(Vapor Pressure), Flow/Viscosity/Density 같은
+  유체 물성치, PSV·Rupture Disc 전용 값(Set/Back/Built-up Pressure, Overpressure,
+  Blowdown 등), Service/Fluid/Description/UOM/Size/Class 같은 설명·단위 컬럼은 전부
+  제외하고, 실제 공정 압력·온도를 나타내는 컬럼만 사용합니다.
+- **Line No 헤더가 다른 의미의 "Line"을 포함하는 경우**: "Line"과 "No"/"Number"가 함께 있는
+  헤더만 인정하고, Service/Size/Class/Fluid/Diameter/UOM/Unit/Description이 포함된 컬럼은
+  제외합니다.
 - 그래도 틀리게 잡히면, ③ 매핑 화면에서 해당 행을 더블클릭해 직접 컬럼을 지정하면 됩니다.
 
 ## 매핑 정보는 어디에 저장되나
