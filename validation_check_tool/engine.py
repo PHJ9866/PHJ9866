@@ -67,7 +67,7 @@ def _is_bad_process_header(t: str) -> bool:
 
 
 def _match_p_des_max(t: str) -> bool:
-    if _is_bad_process_header(t) or not _has(t, r"PRESS", r"DESIGN"):
+    if _is_bad_process_header(t) or not _has(t, r"\bPRESS", r"DESIGN"):
         return False
     if _has(t, r"MAX"):
         return True
@@ -78,7 +78,7 @@ def _match_p_des_max(t: str) -> bool:
 
 
 def _match_p_op(t: str) -> bool:
-    if _is_bad_process_header(t) or not _has(t, r"PRESS") or _has(t, r"DESIGN"):
+    if _is_bad_process_header(t) or not _has(t, r"\bPRESS") or _has(t, r"DESIGN"):
         return False
     if _has(t, r"NOR(MAL)?"):
         return True
@@ -708,14 +708,19 @@ def load_master_lines(df: pd.DataFrame, mapping: dict) -> list[MasterLine]:
     idx = _mapping_indexes(mapping, ["line", *PROCESS_FIELDS], df.shape[1])
     if idx["line"] is None:
         return []
+    # Skip the header block itself rather than assuming every project's Line No
+    # follows Baltic's "301-ATM-0007" dash-separated shape - a project with a
+    # simpler tag-style Line No (e.g. "TI-0129") would otherwise have every
+    # row rejected.
+    data_start = detect_header_row_count(df)
     lines: list[MasterLine] = []
-    for r in range(len(df)):
+    for r in range(data_start, len(df)):
         def get(field_name):
             i = idx[field_name]
             return clean(df.iat[r, i]) if i is not None else ""
 
         line_no = get("line")
-        if len(line_no.split("-")) < 3:
+        if not line_no:
             continue
         lines.append(
             MasterLine(
