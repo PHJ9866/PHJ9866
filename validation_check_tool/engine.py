@@ -203,7 +203,13 @@ def detect_type(tag) -> str:
     for t in TAG_TYPE_KEYWORDS:
         if f"-{t}" in tag:
             return t
-    return "UNKNOWN"
+    # TAG_TYPE_KEYWORDS only covers Baltic's own instrument-type codes. Other
+    # projects use their own prefixes (e.g. "TI-0129" for a temperature
+    # indicator), so fall back to the tag's own leading letters rather than
+    # reporting every unrecognized prefix as "UNKNOWN" - this is just used for
+    # the report's informational Type column, not for matching.
+    match = re.match(r"^([A-Z]{1,6})[-\s]", tag)
+    return match.group(1) if match else "UNKNOWN"
 
 
 def detect_family(sheet_name: str) -> str | None:
@@ -801,13 +807,15 @@ def load_instrument_rows(sheet_mappings: list[SheetMapping], df_cache: dict) -> 
         if idx["tag"] is None:
             continue
 
-        for r in range(len(df)):
+        # Used to rely on unrecognized-type tags being skipped to also weed out
+        # the header block itself; now that any tag prefix is accepted (see
+        # detect_type), the header rows need to be skipped explicitly instead.
+        data_start = detect_header_row_count(df)
+        for r in range(data_start, len(df)):
             tag = clean(df.iat[r, idx["tag"]])
             if not tag:
                 continue
             inst_type = detect_type(tag)
-            if inst_type == "UNKNOWN":
-                continue
 
             def get(field_name):
                 i = idx[field_name]
