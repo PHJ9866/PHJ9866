@@ -291,7 +291,13 @@ def _is_data_row(row) -> bool:
     if non_null < 3:
         return False
     numeric_like = sum(1 for v in row if pd.notna(v) and extract_numeric(v) is not None)
-    return numeric_like / non_null >= 0.6
+    # Wide sheets with many Min/Nor/Max/UOM/UOM-Flag style groups (e.g. valve
+    # sizing datasheets) can have as many text UOM/unit-label columns as
+    # numeric ones, pulling the ratio below what a narrower sheet would show
+    # for a genuine data row. A real header row never has more than a
+    # stray numeric cell, so also accept rows with a solid absolute count of
+    # numeric-looking cells even if the ratio alone falls short.
+    return numeric_like / non_null >= 0.6 or numeric_like >= 8
 
 
 def detect_header_row_count(df: pd.DataFrame, max_rows: int = 40, confirm_rows: int = 3) -> int:
