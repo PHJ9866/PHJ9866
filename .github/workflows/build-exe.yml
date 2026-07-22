@@ -31,6 +31,14 @@ jobs:
         working-directory: validation_check_tool
         run: pyinstaller --onefile --windowed --name ValidationCheckTool app.py
 
+      - name: Zip the EXE
+        # Some browsers hold back bare .exe downloads (Safe Browsing flags
+        # unsigned, rarely-seen executables and can leave them stuck as
+        # .crdownload indefinitely) - a .zip download doesn't trigger the
+        # same executable-specific warning.
+        working-directory: validation_check_tool/dist
+        run: Compress-Archive -Path ValidationCheckTool.exe -DestinationPath ValidationCheckTool.zip
+
       - name: Publish latest build
         uses: softprops/action-gh-release@v2
         with:
@@ -38,8 +46,11 @@ jobs:
           name: Validation Check Tool - Latest Build
           body: >
             Validation Check Excel Mapping Tool 자동 빌드본. 이 파일은 코드가 바뀔 때마다
-            자동으로 새로 만들어져서 같은 링크로 계속 덮어써집니다.
+            자동으로 새로 만들어져서 같은 링크로 계속 덮어써집니다. 브라우저가 exe 다운로드를
+            막으면 zip으로 받아서 압축을 풀어 실행할 것.
           prerelease: true
-          files: validation_check_tool/dist/ValidationCheckTool.exe
+          files: |
+            validation_check_tool/dist/ValidationCheckTool.exe
+            validation_check_tool/dist/ValidationCheckTool.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
