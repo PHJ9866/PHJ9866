@@ -959,6 +959,7 @@ class ReportStats:
     missing_lines: int = 0
     fail_count: int = 0
     output_rows: int = 0
+    unmatched_instruments: int = 0
 
 
 def build_report(master_lines: list[MasterLine], instrument_rows: list[InstrumentRow],
@@ -975,10 +976,12 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
     stats = ReportStats(total_lines=len(master_lines), instrument_count=len(instrument_rows))
     excel_row = 2
     n_cols = len(REPORT_HEADERS)
+    matched_instrument_ids: set[int] = set()
 
     for line in master_lines:
         matches = [inst for inst in instrument_rows
                    if line.line_no and line.line_no.upper() in inst.line_no.upper()]
+        matched_instrument_ids.update(id(inst) for inst in matches)
 
         # Evaluate every match's PASS/FAIL before writing the MASTER row, so its
         # Result cell can roll up "FAIL" whenever any related Instrument fails -
@@ -1045,19 +1048,28 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
     ws.auto_filter.ref = ws.dimensions
     ws.freeze_panes = "B2"
 
-    summary = wb.create_sheet("Summary")
-    summary_rows = [
-        ("Total Lines", stats.total_lines),
-        ("Instrument Count", stats.instrument_count),
-        ("Matched", stats.matched),
-        ("Missing Lines", stats.missing_lines),
-        ("Fail Count", stats.fail_count),
-        ("Output Rows", stats.output_rows),
-    ]
-    for r, (label, value) in enumerate(summary_rows, start=1):
-        summary.cell(r, 1, label)
-        summary.cell(r, 2, value)
-    summary.column_dimensions["A"].width = 20
+    unmatched = [inst for inst in instrument_rows if id(inst) not in matched_instrument_ids]
+    stats.unmatched_instruments = len(unmatched)
+
+    unmatched_ws = wb.create_sheet("Unmatched Instruments")
+    unmatched_headers = ["Tag No", "Line No", "Source Sheet", "Source File"]
+    for col, h in enumerate(unmatched_headers, start=1):
+        cell = unmatched_ws.cell(1, col, h)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+    for r, inst in enumerate(unmatched, start=2):
+        unmatched_ws.cell(r, 1, inst.tag)
+        unmatched_ws.cell(r, 2, inst.line_no)
+        unmatched_ws.cell(r, 3, inst.source_sheet)
+        unmatched_ws.cell(r, 4, inst.source_file)
+    for row in unmatched_ws.iter_rows(min_row=1, max_row=max(1, len(unmatched) + 1),
+                                       min_col=1, max_col=len(unmatched_headers)):
+        for cell in row:
+            cell.border = THIN_BORDER
+    for col_idx, header in enumerate(unmatched_headers, start=1):
+        unmatched_ws.column_dimensions[get_column_letter(col_idx)].width = max(14, len(header) + 4)
+    unmatched_ws.auto_filter.ref = unmatched_ws.dimensions
+    unmatched_ws.freeze_panes = "A2"
 
     wb.save(output_path)
     return stats

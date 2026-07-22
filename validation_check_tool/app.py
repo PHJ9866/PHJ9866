@@ -486,7 +486,8 @@ class MainApp(TkinterDnD.Tk):
             f"Instrument Count: {stats.instrument_count}\n"
             f"Matched: {stats.matched}\n"
             f"Missing Lines: {stats.missing_lines}\n"
-            f"Fail Count: {stats.fail_count}\n\n"
+            f"Fail Count: {stats.fail_count}\n"
+            f"Unmatched Instruments: {stats.unmatched_instruments}\n\n"
             f"저장 위치:\n{output_path}"
         )
         if messagebox.askyesno("완료", msg + "\n\n파일이 있는 폴더를 열까요?"):

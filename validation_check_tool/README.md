@@ -58,7 +58,8 @@ python app.py
      표시됩니다 - 엑셀에서 Result 열을 FAIL로 필터링해도 Line 행이 같이 남아있도록 하기 위함입니다.
    - 맨 끝 `Remark` 열은 색칠 없이 흰 배경으로 생성되어, 검토하면서 메모를 남길 수 있습니다.
    - 모든 셀에 옅은 테두리가 적용되어 표 형태로 바로 보기 편합니다.
-   - `Summary` 시트에 전체 통계가 함께 저장됩니다.
+   - `Unmatched Instruments` 시트에 어떤 Line No와도 매칭되지 않은 Instrument Tag들이
+     (Tag No / Line No / Source Sheet / Source File과 함께) 나열됩니다.
 
 ## Process Data (6종)
 
