@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 PROCESS_FIELDS = ["p_op", "p_des_max", "t_op", "t_op_max", "t_min", "t_max"]
@@ -924,9 +924,10 @@ def describe_mapping_diff(old_config: dict, sheet_mappings: list[SheetMapping]) 
 GRAY = PatternFill("solid", fgColor="D9D9D9")
 GREEN = PatternFill("solid", fgColor="C6EFCE")
 RED = PatternFill("solid", fgColor="FFC7CE")
-YELLOW = PatternFill("solid", fgColor="FFF2CC")
 HEADER_FILL = PatternFill("solid", fgColor="305496")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
+THIN_SIDE = Side(style="thin", color="BFBFBF")
+THIN_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN_SIDE)
 
 PROCESS_FIELD_COLUMNS = [
     ("p_op", "P_Oper"),
@@ -938,12 +939,12 @@ PROCESS_FIELD_COLUMNS = [
 ]
 
 REPORT_HEADERS = (
-    ["Line No", "Tag No", "Type"]
+    ["Line No", "Tag No"]
     + [h for _, h in PROCESS_FIELD_COLUMNS]
     + ["Source Sheet", "Result", "Remark"]
 )
 
-PROCESS_START_COL = 4
+PROCESS_START_COL = 3
 FIELD_COL = {f: PROCESS_START_COL + i for i, (f, _) in enumerate(PROCESS_FIELD_COLUMNS)}
 SOURCE_SHEET_COL = PROCESS_START_COL + len(PROCESS_FIELD_COLUMNS)
 RESULT_COL = SOURCE_SHEET_COL + 1
@@ -974,9 +975,13 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
     stats = ReportStats(total_lines=len(master_lines), instrument_count=len(instrument_rows))
     excel_row = 2
     n_cols = len(REPORT_HEADERS)
+    # Reporting every 25 lines floods the log panel on large Line Lists
+    # (thousands of progress messages); ~20 updates total stays informative
+    # without slowing the UI down or scrolling the log past readability.
+    progress_interval = max(1, len(master_lines) // 20)
 
     for i, line in enumerate(master_lines):
-        if progress and i % 25 == 0:
+        if progress and i % progress_interval == 0:
             progress(f"리포트 작성 중: {i}/{len(master_lines)}")
 
         matches = [inst for inst in instrument_rows
@@ -996,7 +1001,6 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
 
         ws.cell(excel_row, 1, line.line_no)
         ws.cell(excel_row, 2, "MASTER")
-        ws.cell(excel_row, 3, "LINE")
         for f in PROCESS_FIELDS:
             ws.cell(excel_row, FIELD_COL[f], getattr(line, f))
         if line_result:
@@ -1008,11 +1012,7 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
         excel_row += 1
 
         if not matches:
-            ws.cell(excel_row, 3, "No Related Item")
-            for c in range(1, n_cols + 1):
-                if c == REMARK_COL:
-                    continue
-                ws.cell(excel_row, c).fill = YELLOW
+            ws.cell(excel_row, 2, "No Related Item")
             excel_row += 1
             stats.missing_lines += 1
             continue
@@ -1023,7 +1023,6 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
                 stats.fail_count += 1
 
             ws.cell(excel_row, 2, inst.tag)
-            ws.cell(excel_row, 3, inst.inst_type)
             for f in PROCESS_FIELDS:
                 ws.cell(excel_row, FIELD_COL[f], getattr(inst, f))
             ws.cell(excel_row, SOURCE_SHEET_COL, inst.source_sheet)
@@ -1041,6 +1040,10 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
             excel_row += 1
 
     stats.output_rows = excel_row - 2
+
+    for row in ws.iter_rows(min_row=1, max_row=excel_row - 1, min_col=1, max_col=n_cols):
+        for cell in row:
+            cell.border = THIN_BORDER
 
     for col_idx, header in enumerate(REPORT_HEADERS, start=1):
         width = max(12, len(header) + 4)

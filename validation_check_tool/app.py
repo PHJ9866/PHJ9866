@@ -174,7 +174,7 @@ class MainApp(TkinterDnD.Tk):
         outer1.pack(fill="x", pady=(0, 12))
         row = ttk.Frame(c1, style="Card.TFrame")
         row.pack(fill="x")
-        self.master_label = ttk.Label(row, text="선택된 파일 없음 (파일을 여기로 끌어다 놓아도 됨)",
+        self.master_label = ttk.Label(row, text="파일 선택 버튼을 클릭하거나 Drag & Drop 사용",
                                        style="Muted.TLabel")
         self.master_label.pack(side="left", fill="x", expand=True)
         ttk.Button(row, text="파일 선택", command=self.pick_master).pack(side="right")
@@ -190,7 +190,7 @@ class MainApp(TkinterDnD.Tk):
                                         font=("Segoe UI", 9), bd=1, relief="solid",
                                         selectbackground=COLORS["accent"])
         self.inst_listbox.pack(side="left", fill="both", expand=True)
-        ttk.Label(c2, text="파일을 여기로 끌어다 놓아도 됨 (여러 개 한 번에 가능)",
+        ttk.Label(c2, text="파일 선택 버튼을 클릭하거나 Drag & Drop 사용",
                   style="Muted.TLabel").pack(anchor="w", pady=(6, 0))
         outer2.drop_target_register(DND_FILES)
         outer2.dnd_bind("<<Drop>>", self._on_instrument_drop)

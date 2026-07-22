@@ -53,10 +53,11 @@ python app.py
 4. **④ Report 생성**: 저장 경로를 지정하면 Validation Report(.xlsx)가 생성됩니다.
    - Line별로 Master 행(회색) + 매칭되는 Instrument 행이 나열됩니다.
    - Process Data가 다르면 빨간색, 같으면 초록색으로 표시됩니다.
-   - 매칭되는 Instrument가 없는 Line은 노란색 "No Related Item"으로 표시됩니다.
+   - 매칭되는 Instrument가 없는 Line은 색칠 없이 "No Related Item"으로 표시됩니다.
    - Line(Master) 행의 `Result`는 그 Line에 속한 Instrument 중 하나라도 FAIL이면 FAIL로
      표시됩니다 - 엑셀에서 Result 열을 FAIL로 필터링해도 Line 행이 같이 남아있도록 하기 위함입니다.
    - 맨 끝 `Remark` 열은 색칠 없이 흰 배경으로 생성되어, 검토하면서 메모를 남길 수 있습니다.
+   - 모든 셀에 옅은 테두리가 적용되어 표 형태로 바로 보기 편합니다.
    - `Summary` 시트에 전체 통계가 함께 저장됩니다.
 
 ## Process Data (6종)
@@ -64,7 +65,7 @@ python app.py
 Operating Pressure, Max Design Pressure, Operating Temperature,
 Max Operating Temperature, Min Design Temperature, Max Design Temperature
 
-Validation 시트에서는 Line No / Tag No / Type 다음, `P_Oper` → `P_Design_Max` →
+Validation 시트에서는 Line No / Tag No 다음, `P_Oper` → `P_Design_Max` →
 `T_Oper` → `T_Oper_Max` → `T_Min_Design` → `T_Max_Design` → Source Sheet → Result → Remark 순으로 배치됩니다.
 
 ## 비교 규칙
