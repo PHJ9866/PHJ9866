@@ -456,10 +456,8 @@ class MainApp(TkinterDnD.Tk):
             if not instrument_rows:
                 self.log("경고: 매칭된 Instrument가 0개임. Instrument 시트의 Line/Tag 매핑 확인 필요.", "err")
 
-            def progress_cb(msg):
-                self.log(msg)
-
-            stats = engine.build_report(master_lines, instrument_rows, output_path, progress=progress_cb)
+            self.log("리포트 작성 중...")
+            stats = engine.build_report(master_lines, instrument_rows, output_path)
             self.after(0, lambda: self._on_report_done(stats, output_path))
 
         threading.Thread(target=work, daemon=True).start()

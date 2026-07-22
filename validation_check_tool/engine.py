@@ -962,7 +962,7 @@ class ReportStats:
 
 
 def build_report(master_lines: list[MasterLine], instrument_rows: list[InstrumentRow],
-                  output_path: str, progress=None) -> ReportStats:
+                  output_path: str) -> ReportStats:
     wb = Workbook()
     ws = wb.active
     ws.title = "Validation"
@@ -975,15 +975,8 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
     stats = ReportStats(total_lines=len(master_lines), instrument_count=len(instrument_rows))
     excel_row = 2
     n_cols = len(REPORT_HEADERS)
-    # Reporting every 25 lines floods the log panel on large Line Lists
-    # (thousands of progress messages); ~20 updates total stays informative
-    # without slowing the UI down or scrolling the log past readability.
-    progress_interval = max(1, len(master_lines) // 20)
 
-    for i, line in enumerate(master_lines):
-        if progress and i % progress_interval == 0:
-            progress(f"리포트 작성 중: {i}/{len(master_lines)}")
-
+    for line in master_lines:
         matches = [inst for inst in instrument_rows
                    if line.line_no and line.line_no.upper() in inst.line_no.upper()]
 
