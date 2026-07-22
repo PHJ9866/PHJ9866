@@ -130,6 +130,7 @@ class MainApp(tk.Tk):
         self.merge_cache: dict = {}
         self.mapping_confirmed = False
         self.last_output_path: str | None = None
+        self._saved_config_snapshot: dict = {}
 
         self._msg_queue: queue.Queue = queue.Queue()
 
@@ -315,6 +316,17 @@ class MainApp(tk.Tk):
         def work():
             saved_config = engine.load_config(self.config_path())
             self.log(f"매핑 저장 위치: {self.config_path()}")
+            self._saved_config_snapshot = saved_config
+            saved_sheet_count = len(saved_config.get("_mappings", {}))
+            if saved_sheet_count:
+                config_file = Path(self.config_path())
+                saved_at = ""
+                if config_file.exists():
+                    saved_at = datetime.fromtimestamp(config_file.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                self.log(f"이전 매핑 기록 발견: 시트 {saved_sheet_count}개 저장됨"
+                         + (f" (마지막 저장: {saved_at})" if saved_at else ""))
+            else:
+                self.log("이전 매핑 기록 없음 - 새로 매핑함")
             self.log("Line List 스캔 중...")
             master_sm, master_df, master_merges = engine.scan_master_file(self.master_file, saved_config)
             self.log("Instrument Datasheet 스캔 중 (모든 시트)...")
@@ -343,8 +355,16 @@ class MainApp(tk.Tk):
 
     def _on_mapping_confirmed(self):
         self.mapping_confirmed = True
+        all_mappings = [self.master_sm, *self.sheet_mappings]
+        diff_lines = engine.describe_mapping_diff(self._saved_config_snapshot, all_mappings)
+        if diff_lines:
+            self.log(f"이전 매핑과 달라진 점 {len(diff_lines)}건:")
+            for line in diff_lines:
+                self.log(f"  {line}")
+        else:
+            self.log("이전 매핑과 동일함 (달라진 점 없음)")
         try:
-            engine.save_config(self.config_path(), [self.master_sm, *self.sheet_mappings])
+            engine.save_config(self.config_path(), all_mappings)
         except OSError as e:
             # Silently swallowing this would be the worst outcome here: the
             # user would only find out a scan/edit later, when everything

@@ -653,13 +653,13 @@ class InstrumentRow:
 # =====================================================
 
 MASTER_KEY = "__MASTER__"
+MASTER_SHEET_NAME = "Line List"
 
 
 def _saved_mapping(saved_config: dict, key: str) -> dict | None:
-    """Column mapping is keyed by the sheet-family key (e.g. "_410_ Control VV
-    (Globe)", shared by that sheet's " - PE"/" - HE"/" - BU" variants, since
-    they always share the same column layout) - so confirming one variant's
-    mapping instantly resolves all the others too."""
+    """Column mapping is keyed by the full sheet name (not a shared family
+    key), so a manual fix on one " - PE"/" - HE"/" - BU" variant never
+    silently changes its siblings, even when they share the same layout."""
     mappings = saved_config.get("_mappings")
     if mappings is not None:
         m = mappings.get(key)
@@ -687,14 +687,18 @@ def scan_master_file(master_file: str, saved_config: dict) -> tuple[SheetMapping
     first_sheet = xl.sheet_names[0]
     df = xl.parse(first_sheet, header=None)
     merges = get_merged_ranges_map(master_file).get(first_sheet, [])
-    saved_mapping = _saved_mapping(saved_config, MASTER_KEY)
+    # save_config() persists every sheet (including the master) under its own
+    # sm.sheet name, i.e. MASTER_SHEET_NAME here - looking this up under the
+    # separate MASTER_KEY constant would never find it, silently re-running
+    # auto-detection on every scan instead of reusing a confirmed mapping.
+    saved_mapping = _saved_mapping(saved_config, MASTER_SHEET_NAME)
     if saved_mapping is not None:
         mapping = saved_mapping
         source = {f: ("saved" if mapping.get(f) else "missing") for f in mapping}
     else:
         auto_map = auto_detect_mapping(df, merges)
         mapping, source = resolve_mapping(MASTER_DEFAULT, auto_map)
-    sm = SheetMapping(file=master_file, sheet="Line List", key=MASTER_KEY,
+    sm = SheetMapping(file=master_file, sheet=MASTER_SHEET_NAME, key=MASTER_KEY,
                        family="MASTER", mapping=mapping, source=source, include=True)
     return sm, df, merges
 
@@ -878,6 +882,39 @@ def save_config(path: str, sheet_mappings: list[SheetMapping]) -> None:
         mappings[sm.sheet] = sm.mapping
         includes[sm.sheet] = sm.include
     Path(path).write_text(json.dumps(config, indent=4, ensure_ascii=False), encoding="utf-8")
+
+
+def describe_mapping_diff(old_config: dict, sheet_mappings: list[SheetMapping]) -> list[str]:
+    """Compares the mapping/include state that's about to be saved against
+    what was already on disk from a previous run, so the user can see at a
+    glance what a re-scan actually changed instead of having to re-check
+    every sheet by hand. Sheets that were saved before but aren't part of
+    this scan (a file that wasn't reselected this time) are left out - that's
+    not a change made by this run."""
+    old_mappings = old_config.get("_mappings", {})
+    old_includes = old_config.get("_includes", {})
+    lines: list[str] = []
+    for sm in sheet_mappings:
+        old_map = old_mappings.get(sm.sheet)
+        if old_map is None:
+            lines.append(f"[신규] {sm.sheet}: 이전 기록 없음 (새로 매핑됨)")
+            continue
+
+        field_diffs = []
+        for f in ["tag", "line", *PROCESS_FIELDS]:
+            old_v = (old_map.get(f) or "").strip()
+            new_v = (sm.mapping.get(f) or "").strip()
+            if old_v != new_v:
+                label = FIELD_LABELS.get(f, f)
+                field_diffs.append(f"{label} {old_v or '매핑 필요'} → {new_v or '매핑 필요'}")
+
+        old_include = old_includes.get(sm.sheet, True)
+        if old_include != sm.include:
+            field_diffs.append(f"포함여부 {'포함' if old_include else '제외'} → {'포함' if sm.include else '제외'}")
+
+        if field_diffs:
+            lines.append(f"[변경] {sm.sheet}: " + ", ".join(field_diffs))
+    return lines
 
 
 # =====================================================
