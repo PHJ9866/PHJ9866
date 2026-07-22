@@ -25,7 +25,9 @@ python app.py
 ## 사용 방법
 
 1. **① Line List (Master) 파일**: Line No / Process Data가 있는 Excel 파일을 선택합니다.
+   "파일 선택" 버튼 대신 탐색기에서 파일을 끌어다 놓아도 됩니다.
 2. **② Instrument Datasheet 파일**: 여러 개 선택할 수 있고, 파일 안의 모든 시트를 자동으로 참조합니다.
+   여러 개를 한 번에 끌어다 놓아도 됩니다.
 3. **③ 스캔 & 매핑 확인**: Tag No, Line No와 Process Data 6종 컬럼을 시트별로 자동 인식합니다.
    Line List(Master) 행이 맨 위에, 그 아래로 한 칸 띄운 뒤 Instrument 시트들이 나열됩니다.
    - 초록색 행: 자동/저장된 매핑으로 정상 인식됨

@@ -18,6 +18,8 @@ from tkinter import filedialog, messagebox
 import tkinter as tk
 from tkinter import ttk
 
+from tkinterdnd2 import DND_FILES, TkinterDnD
+
 import engine
 
 CONFIG_FILENAME = "validation_mapping_config.json"
@@ -73,6 +75,10 @@ def setup_style(root: tk.Tk) -> None:
     style.configure("Horizontal.TProgressbar", background=COLORS["accent"])
 
 
+def _is_excel_file(path: str) -> bool:
+    return Path(path).suffix.lower() in (".xlsx", ".xls")
+
+
 def card(parent, title=None):
     outer = ttk.Frame(parent, style="TFrame")
     frame = ttk.Frame(outer, style="Card.TFrame", padding=16)
@@ -112,7 +118,7 @@ class Tooltip:
             self.tip = None
 
 
-class MainApp(tk.Tk):
+class MainApp(TkinterDnD.Tk):
     def __init__(self):
         super().__init__()
         self.title("Validation Check - Line List vs Instrument Datasheet")
@@ -168,9 +174,12 @@ class MainApp(tk.Tk):
         outer1.pack(fill="x", pady=(0, 12))
         row = ttk.Frame(c1, style="Card.TFrame")
         row.pack(fill="x")
-        self.master_label = ttk.Label(row, text="선택된 파일 없음", style="Muted.TLabel")
+        self.master_label = ttk.Label(row, text="선택된 파일 없음 (파일을 여기로 끌어다 놓아도 됨)",
+                                       style="Muted.TLabel")
         self.master_label.pack(side="left", fill="x", expand=True)
         ttk.Button(row, text="파일 선택", command=self.pick_master).pack(side="right")
+        outer1.drop_target_register(DND_FILES)
+        outer1.dnd_bind("<<Drop>>", self._on_master_drop)
 
         # Step 2 - instrument files
         outer2, c2 = card(body, "② Instrument Datasheet 파일 (여러 개 선택 가능, 모든 시트 자동 참조)")
@@ -181,6 +190,12 @@ class MainApp(tk.Tk):
                                         font=("Segoe UI", 9), bd=1, relief="solid",
                                         selectbackground=COLORS["accent"])
         self.inst_listbox.pack(side="left", fill="both", expand=True)
+        ttk.Label(c2, text="파일을 여기로 끌어다 놓아도 됨 (여러 개 한 번에 가능)",
+                  style="Muted.TLabel").pack(anchor="w", pady=(6, 0))
+        outer2.drop_target_register(DND_FILES)
+        outer2.dnd_bind("<<Drop>>", self._on_instrument_drop)
+        self.inst_listbox.drop_target_register(DND_FILES)
+        self.inst_listbox.dnd_bind("<<Drop>>", self._on_instrument_drop)
         btns = ttk.Frame(list_row, style="Card.TFrame")
         btns.pack(side="left", fill="y", padx=(10, 0))
         ttk.Button(btns, text="추가", command=self.add_instrument_files).pack(fill="x", pady=2)
@@ -262,17 +277,38 @@ class MainApp(tk.Tk):
     def pick_master(self):
         path = filedialog.askopenfilename(title="Line List (Master) 파일 선택",
                                            filetypes=[("Excel files", "*.xlsx *.xls")])
-        if not path:
-            return
+        if path:
+            self._set_master_file(path)
+
+    def _set_master_file(self, path: str):
         self.master_file = path
         self.master_label.configure(text=Path(path).name, style="Card.TLabel")
         self.mapping_confirmed = False
         self.generate_btn.configure(state="disabled")
         self.log(f"Line List 파일 선택: {Path(path).name}")
 
+    def _on_master_drop(self, event):
+        paths = [p for p in self._parse_dropped_paths(event.data) if _is_excel_file(p)]
+        if not paths:
+            self.log("끌어다 놓은 파일 중 Excel 파일(.xlsx/.xls)이 없음", "err")
+            return
+        if len(paths) > 1:
+            self.log(f"Line List는 1개만 가능 - 첫 번째 파일({Path(paths[0]).name})만 사용함")
+        self._set_master_file(paths[0])
+
     def add_instrument_files(self):
         paths = filedialog.askopenfilenames(title="Instrument Datasheet 파일 선택 (여러 개 가능)",
                                              filetypes=[("Excel files", "*.xlsx *.xls")])
+        self._add_instrument_paths(paths)
+
+    def _on_instrument_drop(self, event):
+        paths = [p for p in self._parse_dropped_paths(event.data) if _is_excel_file(p)]
+        if not paths:
+            self.log("끌어다 놓은 파일 중 Excel 파일(.xlsx/.xls)이 없음", "err")
+            return
+        self._add_instrument_paths(paths)
+
+    def _add_instrument_paths(self, paths):
         added = 0
         for p in paths:
             if p not in self.instrument_files:
@@ -283,6 +319,12 @@ class MainApp(tk.Tk):
             self.mapping_confirmed = False
             self.generate_btn.configure(state="disabled")
             self.log(f"Instrument Datasheet {added}개 추가됨")
+
+    def _parse_dropped_paths(self, data: str) -> list[str]:
+        # tkinterdnd2 wraps each path in {..} when it contains spaces, and
+        # separates multiple paths with spaces - tk's own splitlist parses
+        # both forms correctly instead of a naive data.split(" ").
+        return [p for p in self.tk.splitlist(data) if p]
 
     def remove_selected_instrument(self):
         sel = list(self.inst_listbox.curselection())
