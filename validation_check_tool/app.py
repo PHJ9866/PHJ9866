@@ -462,12 +462,12 @@ class MainApp(TkinterDnD.Tk):
             if last_report_path and Path(last_report_path).exists():
                 previous_checks = engine.load_previous_checks(last_report_path)
                 if previous_checks:
-                    self.log(f"이전 Report에서 체크 여부 이어받음: {Path(last_report_path).name} "
+                    self.log(f"이전 Report에서 체크 여부/Remark 이어받음: {Path(last_report_path).name} "
                              f"({len(previous_checks)}건)")
                 else:
-                    self.log(f"이전 Report에서 체크 여부를 찾지 못함: {Path(last_report_path).name}")
+                    self.log(f"이전 Report에서 체크 여부/Remark를 찾지 못함: {Path(last_report_path).name}")
             elif last_report_path:
-                self.log(f"이전 Report 파일을 찾을 수 없음 - 체크 여부 이어받기 건너뜀: {last_report_path}")
+                self.log(f"이전 Report 파일을 찾을 수 없음 - 체크 여부/Remark 이어받기 건너뜀: {last_report_path}")
 
             self.log("리포트 작성 중...")
             stats = engine.build_report(master_lines, instrument_rows, output_path,
@@ -506,7 +506,8 @@ class MainApp(TkinterDnD.Tk):
             f"Missing Lines: {stats.missing_lines}\n"
             f"Fail Count: {stats.fail_count}\n"
             f"Unmatched Instruments: {stats.unmatched_instruments}\n"
-            f"Checked (이어받음): {stats.carried_over_checks}\n\n"
+            f"Checked (이어받음): {stats.carried_over_checks}\n"
+            f"Remark (이어받음): {stats.carried_over_remarks}\n\n"
             f"저장 위치:\n{output_path}"
         )
         if messagebox.askyesno("완료", msg + "\n\n파일이 있는 폴더를 열까요?"):

@@ -63,9 +63,10 @@ python app.py
    - `Result` 다음 `Checked` 열은 검토 완료 여부를 표시하는 드롭다운 칸입니다(칸을 클릭하면
      "V" 선택 가능). Report를 생성할 때마다 바로 이전에 만든 Report 파일 경로가
      `validation_mapping_config.json`에 자동으로 기억되어, 다음번에 새로 Report를 만들면
-     같은 Line No/Tag No 조합에 대해 이전 Report에서 체크했던 내용이 자동으로 이어받아집니다
-     (진행 로그에 몇 건을 이어받았는지 표시됨). 이미 검토한 항목을 또 검토하는 중복 작업을
-     막기 위한 기능입니다.
+     같은 Line No/Tag No 조합에 대해 이전 Report에서 체크했던 내용과 `Remark`에 적어둔
+     메모가 자동으로 이어받아집니다(진행 로그에 몇 건을 이어받았는지 표시됨). 매칭되는
+     Instrument가 없어 "No Related Item"으로 표시된 행도 동일하게 이어받아집니다. 이미
+     검토한 항목을 또 검토하는 중복 작업을 막기 위한 기능입니다.
 
 ## Process Data (6종)
 
