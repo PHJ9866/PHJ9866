@@ -877,7 +877,9 @@ def save_config(path: str, sheet_mappings: list[SheetMapping]) -> None:
     includes = config.setdefault("_includes", {})
     # Migrate any pre-existing legacy flat entries (from before this split)
     # into the new structure instead of leaving them stranded and unused.
-    for legacy_key in [k for k in config if k not in ("_mappings", "_includes")]:
+    # Other recognized top-level keys (e.g. _last_report_path) must survive
+    # this pass untouched rather than being treated as legacy junk.
+    for legacy_key in [k for k in config if k not in ("_mappings", "_includes", "_last_report_path")]:
         legacy = config.pop(legacy_key)
         if isinstance(legacy, dict):
             mappings.setdefault(legacy_key, legacy.get("mapping", legacy))
