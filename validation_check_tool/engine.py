@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Border, Font, PatternFill, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -934,6 +934,7 @@ HEADER_FILL = PatternFill("solid", fgColor="305496")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
 THIN_SIDE = Side(style="thin", color="BFBFBF")
 THIN_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN_SIDE)
+CENTER_ALIGN = Alignment(horizontal="center")
 
 PROCESS_FIELD_COLUMNS = [
     ("p_op", "P_Oper"),
@@ -1116,6 +1117,10 @@ def build_report(master_lines: list[MasterLine], instrument_rows: list[Instrumen
     for row in ws.iter_rows(min_row=1, max_row=excel_row - 1, min_col=1, max_col=n_cols):
         for cell in row:
             cell.border = THIN_BORDER
+
+    for cell in ws.iter_cols(min_col=CHECKED_COL, max_col=CHECKED_COL, min_row=1, max_row=excel_row - 1):
+        for c in cell:
+            c.alignment = CENTER_ALIGN
 
     if excel_row > 2:
         # A one-option dropdown ("V") on the Checked column, rather than free
